@@ -1,0 +1,39 @@
+{
+  "bundle_file": "ddi-khanza-v1.0.0.json.gz",
+  "bundle_id": "DDI-KHANZA-v1.0.0",
+  "bundle_sha256": "ef207bede48cc3a8d1972c28ce8b52a345602ec7de11451b0c327947fb0926cd",
+  "catalog_profile": {
+    "activation_status": {
+      "DRAFT": 11,
+      "HOLD_CLINICAL_REVIEW_REQUIRED": 175,
+      "NOT_AN_ALERT_RULE": 4867,
+      "READY_FOR_PHARMACIST_REVIEW": 379
+    },
+    "clinical_review_required": 175,
+    "enabled": 0,
+    "interaction_status": {
+      "ASSESSED_NO_INTERACTION": 3646,
+      "EXCLUDED": 246,
+      "INTERACTION_FOUND": 565,
+      "NOT_ASSESSABLE": 975
+    },
+    "missing_source_reference": 18,
+    "severity": {
+      "CONTRAINDICATED": 4,
+      "MINOR": 102,
+      "NONE": 4867,
+      "SERIOUS": 55,
+      "SIGNIFICANT": 404
+    }
+  },
+  "format": "EMSS_BUNDLED_DDI_SEED_MANIFEST_V1",
+  "ingredient_count": 159,
+  "knowledge_base_status": "DRAFT",
+  "patient_identity_included": false,
+  "rule_count": 5432,
+  "semantic_sha256": "dbd4539134135ceaa2f872faa7068b4445dd2eae8414d479db3f6c22a421d16e",
+  "source_database_sha256": "6b7953b8643f22d4534c8bdada0dab532ad0c2717e7d06036360df7938dbe551",
+  "source_knowledge_checksum": "9f5283e7908fbfe679484344567b8b34e58b78ced80c8a3de9a38a805667420a",
+  "user_accounts_included": false,
+  "validator_identity_redacted": true
+}

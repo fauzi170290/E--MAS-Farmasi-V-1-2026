@@ -1,0 +1,13 @@
+{
+  "format": "EMAS_BUNDLED_MAPPING_V1",
+  "bundle_id": "MAPPING-KHANZA-20260828",
+  "source_filename": "MASTER_DDI_KHANZA_APLIKASI_v1.0.0_2026-07-24 (1).xlsx",
+  "source_sha256": "9f5283e7908fbfe679484344567b8b34e58b78ced80c8a3de9a38a805667420a",
+  "patient_identity_included": false,
+  "clinical_approval": false,
+  "bundle_sha256": "a364f4af37a14b6c9ce47c7fa44e60b44ca7f9eda987528a70a7f8f683044768",
+  "semantic_sha256": "c46de5819f59ec868934520b3da529f43b1c934f972cf35f0433498851feb327",
+  "drug_count": 221,
+  "correction_count": 192,
+  "component_count": 443
+}

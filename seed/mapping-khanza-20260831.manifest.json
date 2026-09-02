@@ -1,0 +1,13 @@
+{
+  "format": "EMAS_BUNDLED_MAPPING_V1",
+  "bundle_id": "MAPPING-KHANZA-20260831",
+  "source_filename": "mapping-khanza-20260831.provenance.json",
+  "source_sha256": "68049818dfb4b4710f3176b00d809c50fb34a308f06423c66d5cee77af41f27a",
+  "patient_identity_included": false,
+  "clinical_approval": false,
+  "bundle_sha256": "dee704675ca4c9438d4c59944ef5fe33f58e51fe748af17a07aedd76dacff88e",
+  "semantic_sha256": "b67ea8087e9e0e79696ccec239309bef51555a88feecd5aa7df3376ab277b9b0",
+  "drug_count": 221,
+  "correction_count": 193,
+  "component_count": 444
+}

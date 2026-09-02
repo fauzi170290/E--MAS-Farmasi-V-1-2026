@@ -1,0 +1,42 @@
+environment = "development"
+app_name = "E-MAS Farmasi"
+data_dir = "local-data"
+database_filename = "emss.db"
+log_level = "INFO"
+session_timeout_minutes = 15
+login_max_attempts = 5
+login_lock_minutes = 15
+sqlite_busy_timeout_ms = 5000
+allow_workstation_mode = true
+workstation_label = "Farmasi"
+tray_enabled = true
+minimize_to_tray = true
+single_instance = true
+backup_daily_enabled = true
+backup_retention_days = 30
+backup_retention_count = 30
+khanza_adapter = "mock"
+khanza_polling_enabled = false
+# Aktifkan hanya setelah persetujuan atas polling internal, bukan push.
+khanza_internal_polling_consent = false
+khanza_recent_days = 2
+khanza_monitor_batch_size = 30
+khanza_poll_interval_seconds = 1
+khanza_page_size = 100
+khanza_stability_interval_seconds = 2.0
+khanza_stability_max_attempts = 3
+khanza_reconnect_base_seconds = 5
+khanza_reconnect_max_seconds = 300
+khanza_host = "127.0.0.1"
+khanza_port = 3306
+khanza_database = "sik"
+khanza_username = "emss_readonly"
+khanza_connect_timeout_seconds = 5
+khanza_query_timeout_seconds = 10
+khanza_header_view = "vw_emss_prescription_header"
+khanza_item_view = "vw_emss_prescription_item"
+khanza_compound_view = "vw_emss_compound_item"
+khanza_drug_view = "vw_emss_drug_master"
+
+# Password MySQL tidak boleh ditulis di file ini. Berikan hanya melalui
+# environment variable EMSS_KHANZA_PASSWORD pada workstation yang berwenang.

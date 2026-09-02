@@ -1,0 +1,2 @@
+"""Utilitas umum aplikasi."""
+

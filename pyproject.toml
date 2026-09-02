@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emss-farmasi"
+version = "1.0.1"
+description = "electronic Medication Alert System pendamping SIMRS Khanza"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { text = "Proprietary - penggunaan internal rumah sakit" }
+authors = [{ name = "Tim E-MAS Farmasi" }]
+dependencies = [
+    "SQLAlchemy>=2.0.51,<2.1",
+    "alembic>=1.18.5,<2",
+    "pydantic>=2.13.4,<3",
+    "pydantic-settings>=2.14.2,<3",
+    "PySide6>=6.11.1,<7",
+    "argon2-cffi>=25.1.0,<26",
+    "PyMySQL>=1.1,<2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9.1.1,<10",
+    "pytest-qt>=4.5,<5",
+    "coverage>=7.15,<8",
+]
+build = [
+    "pyinstaller>=6.16,<7",
+]
+
+[project.scripts]
+emss = "emss.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+emss = [
+    "assets/emss-logo.png",
+    "assets/emss-tray.png",
+    "assets/emss.ico",
+    "assets/combo-chevron-down.svg",
+    "assets/icons/*.svg",
+    "assets/icons/*.md",
+    "assets/audio/*.wav",
+    "assets/audio/*.md",
+    "assets/guides/*.pdf",
+]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "ui: pengujian UI yang memerlukan Qt",
+    "security: pengujian kontrol keamanan",
+    "integration: pengujian lintas komponen",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/emss"]
+omit = [
+    "src/emss/ui/*",
+    "src/emss/main.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 87

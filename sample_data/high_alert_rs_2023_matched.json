@@ -1,0 +1,27 @@
+{
+  "profile": "RSD dr. H. Soemarno Sosroatmodjo - High Alert 2023",
+  "source": "Kebijakan RS 01-08-2023, PDF halaman 2 dan 4; pembanding ISMP Acute Care 2024",
+  "severity_policy": "REVIEW - alert identifikasi high-alert, bukan interaksi obat atau HOLD",
+  "entries": [
+    {"code": "3795", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "1035", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "3895", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "3492", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "4427", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "2947", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "4056", "category": "ANTIDIABETIK ORAL", "active": true},
+    {"code": "5719", "category": "OBAT YANG MEMPENGARUHI DARAH", "active": true},
+    {"code": "1176", "category": "AGONIS ADRENERGIK", "active": true},
+    {"code": "1375", "category": "ANTIARITMIA", "active": true},
+    {"code": "221", "category": "GLIKOSIDA JANTUNG", "active": true},
+    {"code": "3495", "category": "ANTIDIABETIK PARENTERAL - INSULIN", "active": true},
+    {"code": "5258", "category": "ANTIDIABETIK PARENTERAL - INSULIN", "active": true},
+    {"code": "5264", "category": "ANTIDIABETIK PARENTERAL - INSULIN", "active": true},
+    {"code": "3177", "category": "ANTIDIABETIK PARENTERAL - INSULIN", "active": true},
+    {"code": "3452", "category": "NARKOTIKA - OPIOID", "active": true},
+    {"code": "175", "category": "NARKOTIKA - OPIOID", "active": true},
+    {"code": "176", "category": "NARKOTIKA - OPIOID", "active": true},
+    {"code": "5758", "category": "KANDIDAT ISMP 2024 - SULFONILUREA", "active": false},
+    {"code": "771", "category": "KANDIDAT ISMP 2024 - OPIOID", "active": false}
+  ]
+}
