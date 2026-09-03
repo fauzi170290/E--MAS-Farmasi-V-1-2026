@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 from emss.audit.service import AuditEvent
 from emss.database.catalog_models import DrugMaster, DrugComponentMapping
 from emss.importexport.drug_import import DrugImportService, DRUG_HEADERS, COMPONENT_HEADERS, normalize_name
+from emss.normalization import canonical_khanza_code
 from emss.importexport.xlsx_writer import XlsxSheet, write_xlsx
 
 
@@ -14,6 +15,7 @@ class CatalogSyncResult:
     read: int
     inserted: int
     preserved: int
+    conflicts: int = 0
 
 
 class CatalogSyncService:
@@ -34,15 +36,29 @@ class CatalogSyncService:
             for r in page:
                 if not r.khanza_code or r.khanza_code <= cursor or r.khanza_code in source:
                     raise ValueError('Paginasi master tidak valid; sinkronisasi dibatalkan.')
-                source[r.khanza_code] = r
+                code = canonical_khanza_code(r.khanza_code)
+                previous = source.get(code)
+                if previous is not None and normalize_name(previous.display_name) != normalize_name(r.display_name):
+                    raise ValueError(f'Konflik kode Khanza {code}: nama obat berbeda; verifikasi master sumber.')
+                source[code] = r
             cursor = page[-1].khanza_code
             if len(source) > 100000:
                 raise ValueError('Master melebihi batas 100.000; hubungi IT.')
-        inserted = 0
+        inserted = conflicts = 0
         with self.database.session() as session:
             DrugImportService._require_manager(session, actor)
+            existing_rows = session.scalars(select(DrugMaster)).all()
             for code, r in source.items():
-                existing = session.scalar(select(DrugMaster).where(DrugMaster.khanza_code == code))
+                matches = [row for row in existing_rows if canonical_khanza_code(row.khanza_code) == code]
+                compatible = matches if len(matches) == 1 else []
+                if len(matches) > 1:
+                    conflicts += 1
+                    self.audit.append(session, AuditEvent(category='MASTER_DATA', action='KHANZA_CODE_CONFLICT',
+                        outcome='REVIEW_REQUIRED', actor_user_id=actor, details={'canonical_code': code,
+                        'source_code': r.khanza_code, 'source_name': r.display_name,
+                        'existing_codes': [row.khanza_code for row in matches]}))
+                    continue
+                existing = compatible[0] if compatible else None
                 if existing is None:
                     session.add(DrugMaster(khanza_code=code, display_name=r.display_name,
                         normalized_name=normalize_name(r.display_name), source_version='KHANZA-VIEW',
@@ -51,9 +67,9 @@ class CatalogSyncService:
                     inserted += 1
             self.audit.append(session, AuditEvent(category='MASTER_DATA', action='KHANZA_MASTER_SYNC',
                 outcome='SUCCESS', actor_user_id=actor, details={'read': len(source), 'inserted': inserted,
-                'preserved': len(source) - inserted, 'mapping_activated': 0}))
+                'preserved': len(source) - inserted - conflicts, 'conflicts': conflicts, 'mapping_activated': 0}))
             session.commit()
-        return CatalogSyncResult(len(source), inserted, len(source) - inserted)
+        return CatalogSyncResult(len(source), inserted, len(source) - inserted - conflicts, conflicts)
 
     def export_mapping_workbook(self, path: Path, actor):
         headers = sorted(DRUG_HEADERS)

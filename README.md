@@ -382,7 +382,176 @@ per resep; aplikasi tidak membuat satu pop-up untuk setiap pasangan.
 Untuk pengujian cepat, klik **Simulasikan CRITICAL** langsung dari tab
 **Antrean & Alert**.
 
-## Menguji adapter dan polling Sprint 6
+## Menghubungkan E-MAS ke database Khanza
+
+Panduan ini adalah prosedur yang dipakai pada PC uji E-MAS. Struktur tabel
+Khanza rumah sakit telah dikonfirmasi sama dengan struktur MariaDB 10.4 yang
+diuji. Pada uji lokal, nama database adalah `sik_emss_uji_lokal`; pada server
+Khanza sebenarnya biasanya `sik`. Pastikan IT/DBA mengganti nama database,
+host, dan alamat workstation sesuai lingkungan rumah sakit.
+
+E-MAS tidak menulis ke tabel Khanza. Integrasi hanya membaca empat view dengan
+akun yang memperoleh hak `SELECT`. Normalisasi kode obat Khanza menjadi lima
+digit dilakukan di E-MAS dan tidak membutuhkan `UPDATE` terhadap kode barang
+atau data historis Khanza.
+
+### 1. Persiapan dan pemeriksaan DBA
+
+1. Buat backup database Khanza dan uji prosedur pada clone terlebih dahulu.
+2. Pastikan tabel berikut tersedia: `resep_obat`, `resep_dokter`,
+   `resep_dokter_racikan`, `resep_dokter_racikan_detail`, `databarang`,
+   `reg_periksa`, `pasien`, `dokter`, dan `poliklinik`.
+3. Pastikan server menggunakan MariaDB 10.4 atau versi kompatibel dan waktu
+   server/workstation benar.
+4. Jalankan pekerjaan DDL dengan akun DBA. Akun operasional E-MAS tidak boleh
+   diberi hak DDL atau akses langsung ke tabel dasar.
+
+### 2. Membuat empat view integrasi
+
+Pilih database target, lalu jalankan **seluruh isi** script resmi
+`templates/khanza_integration_views_mariadb104.sql`. Script memakai
+`CREATE OR REPLACE VIEW`, tidak berisi `INSERT`, `UPDATE`, atau `DELETE`.
+
+Contoh melalui MariaDB client untuk database uji:
+
+```sql
+USE sik_emss_uji_lokal;
+SOURCE C:/path-ke-source/emas-farmasi/templates/khanza_integration_views_mariadb104.sql;
+```
+
+Contoh untuk database Khanza sebenarnya setelah disetujui DBA:
+
+```sql
+USE sik;
+SOURCE C:/path-ke-source/emas-farmasi/templates/khanza_integration_views_mariadb104.sql;
+```
+
+Script harus menghasilkan tepat empat view berikut:
+
+- `vw_emss_prescription_header` untuk header, pasien, unit, dokter, status,
+  token validasi, kelengkapan komposisi, dan waktu perubahan resep;
+- `vw_emss_prescription_item` untuk obat reguler;
+- `vw_emss_compound_item` untuk komponen racikan;
+- `vw_emss_drug_master` untuk kode dan nama barang aktif/nonaktif.
+
+Verifikasi setelah script selesai:
+
+```sql
+SHOW FULL TABLES
+WHERE Table_type = 'VIEW'
+  AND Tables_in_sik LIKE 'vw_emss_%';
+
+SELECT COUNT(*) FROM vw_emss_prescription_header;
+SELECT COUNT(*) FROM vw_emss_prescription_item;
+SELECT COUNT(*) FROM vw_emss_compound_item;
+SELECT COUNT(*) FROM vw_emss_drug_master;
+
+SELECT no_resep, status_resep, item_basis, composition_complete, changed_at
+FROM vw_emss_prescription_header
+ORDER BY changed_at DESC
+LIMIT 10;
+```
+
+Untuk database clone, ganti `Tables_in_sik` pada query pertama dengan
+`Tables_in_sik_emss_uji_lokal`. Jangan menjalankan
+`templates/khanza_final_items_candidate_mariadb104.sql`; file tersebut hanya
+draft penelitian ekstraksi dan bukan kontrak aplikasi yang aktif.
+
+### 3. Membuat akun read-only E-MAS
+
+Ganti `IP_WORKSTATION` dengan IP tetap PC E-MAS dan gunakan password kuat yang
+disimpan oleh IT. Jangan menggunakan host `%`. Contoh lengkap juga tersedia di
+`templates/khanza_readonly_grants.example.sql`.
+
+```sql
+CREATE USER 'emss_readonly'@'IP_WORKSTATION'
+IDENTIFIED BY 'PASSWORD_KUAT_DARI_DBA';
+
+GRANT SELECT ON sik.vw_emss_prescription_header
+TO 'emss_readonly'@'IP_WORKSTATION';
+GRANT SELECT ON sik.vw_emss_prescription_item
+TO 'emss_readonly'@'IP_WORKSTATION';
+GRANT SELECT ON sik.vw_emss_compound_item
+TO 'emss_readonly'@'IP_WORKSTATION';
+GRANT SELECT ON sik.vw_emss_drug_master
+TO 'emss_readonly'@'IP_WORKSTATION';
+
+FLUSH PRIVILEGES;
+```
+
+Untuk uji di PC yang sama, host dapat berupa `127.0.0.1` dan nama database pada
+empat `GRANT` adalah `sik_emss_uji_lokal`. Buktikan pembatasannya dengan akun
+tersebut: `SELECT` pada empat view harus berhasil, sedangkan `SELECT` langsung
+pada tabel seperti `resep_obat` harus ditolak.
+
+### 4. Menyimpan password di Windows
+
+Simpan password sebagai environment variable Windows tingkat **Machine**
+bernama `EMSS_KHANZA_PASSWORD`. Gunakan dialog **System Properties → Advanced
+→ Environment Variables** atau mekanisme secrets resmi rumah sakit. Jangan
+menulis password di `config.toml`, source code, screenshot, log, atau README.
+Tutup penuh E-MAS termasuk proses tray, lalu buka kembali agar proses baru
+membaca environment variable tersebut.
+
+### 5. Mengatur konfigurasi E-MAS
+
+Backup terlebih dahulu
+`C:\ProgramData\eMSSFarmasi\config.toml`, kemudian atur bagian Khanza seperti
+berikut. Untuk server sebenarnya, ganti host dan database sesuai hasil DBA.
+
+```toml
+khanza_adapter = "mysql"
+khanza_polling_enabled = true
+khanza_internal_polling_consent = true
+khanza_recent_days = 2
+khanza_monitor_batch_size = 30
+khanza_poll_interval_seconds = 1
+khanza_page_size = 100
+khanza_stability_interval_seconds = 2.0
+khanza_stability_max_attempts = 3
+khanza_reconnect_base_seconds = 5
+khanza_reconnect_max_seconds = 300
+khanza_host = "IP_SERVER_KHANZA"
+khanza_port = 3306
+khanza_database = "sik"
+khanza_username = "emss_readonly"
+khanza_connect_timeout_seconds = 5
+khanza_query_timeout_seconds = 10
+khanza_header_view = "vw_emss_prescription_header"
+khanza_item_view = "vw_emss_prescription_item"
+khanza_compound_view = "vw_emss_compound_item"
+khanza_drug_view = "vw_emss_drug_master"
+```
+
+Pada PC uji lokal gunakan `khanza_host = "127.0.0.1"` dan
+`khanza_database = "sik_emss_uji_lokal"`. Nilai `environment` harus mengikuti
+tahap rollout yang telah disetujui rumah sakit; jangan mengubah label menjadi
+production hanya untuk menghilangkan penanda uji. Mode lama
+`khanza_adapter = "mysql_local_test"` tidak lagi digunakan.
+
+### 6. Verifikasi dari aplikasi
+
+1. Jalankan kembali E-MAS dan login dengan akun yang berwenang.
+2. Buka tab **Integrasi Khanza** dan pastikan status koneksi berhasil.
+3. Jalankan **Periksa & Poll Sekarang**, lalu periksa cursor dan jumlah resep.
+4. Jalankan sinkronisasi master obat dan tinjau konflik kode/nama/kandungan;
+   konflik tidak boleh dipetakan otomatis.
+5. Buat satu resep reguler dan satu racikan pada Khanza uji, lanjutkan melalui
+   status validasi yang biasa digunakan, lalu pastikan keduanya muncul pada
+   **Antrean & Alert**.
+6. Verifikasi kode seperti `000003795`, `03795`, dan `3795` dibaca sebagai
+   identitas kanonik `03795`. Data historis Khanza harus tetap tidak berubah.
+7. Untuk hasil `SAFE · COMPLETE`, pastikan seluruh obat terpetakan, semua
+   pasangan dinilai, serta tidak ada interaksi, duplikasi, high-alert, atau
+   kendala kelengkapan. Suara aman hanya diputar sekali setelah skrining selesai.
+8. Tinjau log E-MAS bila koneksi gagal, tetapi jangan menyalin password atau
+   identitas pasien ke tiket dukungan.
+
+Sebelum operasional sebenarnya, apoteker/clinical reviewer tetap harus
+menyetujui master mapping dan knowledge base DDI. Keberhasilan koneksi database
+tidak dengan sendirinya merupakan persetujuan penggunaan klinis.
+
+## Menguji adapter dan polling dengan mock
 
 1. Pastikan `khanza_adapter = "mock"` dan
    `khanza_polling_enabled = false` di konfigurasi pengembangan.
@@ -390,11 +559,6 @@ Untuk pengujian cepat, klik **Simulasikan CRITICAL** langsung dari tab
 3. Klik **Tambahkan Resep Uji ke Adapter**.
 4. Klik **Periksa & Poll Sekarang**.
 5. Tinjau status koneksi/cursor lalu buka **Antrean & Alert**.
-
-Untuk koneksi MySQL, IT terlebih dahulu membuat empat view sesuai
-`docs/KHANZA_VIEW_CONTRACT_SPRINT_6.md` dan akun yang hanya memperoleh `SELECT`.
-Set `khanza_adapter = "mysql"`; password diberikan melalui environment Windows
-`EMSS_KHANZA_PASSWORD`, tidak ditulis dalam TOML atau source code.
 
 ## Mencatat intervensi dan membuka dashboard Sprint 7
 

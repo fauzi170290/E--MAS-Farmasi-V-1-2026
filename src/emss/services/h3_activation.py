@@ -68,6 +68,7 @@ class H5HoldValidationPreview:
     version_id: str
     version_status: str
     hold_pairs: int
+    already_active_pairs: int
     severity_counts: tuple[tuple[str, int], ...]
     source_references: int
     missing_source_reference_pairs: tuple[str, ...]
@@ -85,7 +86,16 @@ class H5HoldActivationResult:
     version_id: str
     active_pairs: int
     activated_hold_pairs: int
+    already_active_pairs: int
     missing_source_reference_pairs: tuple[str, ...]
+    activated_by: str
+
+
+@dataclass(frozen=True)
+class DdiReferenceBasisActivationResult:
+    version_id: str
+    activated_reference_pairs: int
+    already_active_pairs: int
     activated_by: str
 
 
@@ -146,7 +156,7 @@ class H3ActivationService:
         """Verify HOLD pair evidence without changing activation state."""
         _manifest, payload = verify_bundled_ddi_seed()
         with self.database.session() as session:
-            version = self._bundled_version(session)
+            version = self._operational_version(session)
             return self._validate_hold_cohort(session, version, payload)
 
     def validate_hold_cohort(
@@ -162,7 +172,7 @@ class H3ActivationService:
         with self.database.session() as session:
             session.execute(text("BEGIN IMMEDIATE"))
             actor = self._authorize(session, actor_user_id)
-            version = self._bundled_version(session)
+            version = self._operational_version(session)
             preview = self._validate_hold_cohort(session, version, payload)
             self.audit.append(
                 session,
@@ -212,7 +222,7 @@ class H3ActivationService:
         with self.database.session() as session:
             session.execute(text("BEGIN IMMEDIATE"))
             actor = self._authorize(session, actor_user_id)
-            version = self._bundled_version(session)
+            version = self._operational_version(session)
             if version.status != "PUBLISHED":
                 raise H3ActivationError(
                     "Aktivasi HOLD hanya tersedia setelah katalog H3 berstatus PUBLISHED."
@@ -248,7 +258,7 @@ class H3ActivationService:
                     DdiRule.activation_status == "HOLD_CLINICAL_REVIEW_REQUIRED",
                 )
             ).all()
-            if len(rules) != self.EXPECTED_HELD_PAIRS:
+            if len(rules) != preview.hold_pairs:
                 raise H3ActivationError(
                     "Jumlah pair HOLD berubah setelah validasi; aktivasi dihentikan."
                 )
@@ -301,7 +311,79 @@ class H3ActivationService:
                 version_id=version.id,
                 active_pairs=active_pairs,
                 activated_hold_pairs=len(rules),
+                already_active_pairs=preview.already_active_pairs,
                 missing_source_reference_pairs=preview.missing_source_reference_pairs,
+                activated_by=actor.display_name,
+            )
+
+    def activate_no_interaction_reference_basis(
+        self, actor_user_id: str, reason: str
+    ) -> DdiReferenceBasisActivationResult:
+        """Make assessed-safe pairs usable as a no-alert screening reference.
+
+        These rules can yield the documented "no interaction found" result,
+        but never create a clinical alert because their interaction status
+        remains ASSESSED_NO_INTERACTION and severity remains NONE.
+        """
+        clean_reason = normalize_text(reason)
+        if len(clean_reason) < 8:
+            raise H3ActivationError(
+                "Catatan aktivasi basis referensi minimal 8 karakter."
+            )
+        with self.database.session() as session:
+            session.execute(text("BEGIN IMMEDIATE"))
+            actor = self._authorize(session, actor_user_id)
+            version = self._operational_version(session)
+            if version.status != "PUBLISHED":
+                raise H3ActivationError(
+                    "Basis referensi hanya dapat diaktifkan pada katalog PUBLISHED."
+                )
+            rules = session.scalars(
+                select(DdiRule).where(
+                    DdiRule.knowledge_base_version_id == version.id,
+                    DdiRule.interaction_status == "ASSESSED_NO_INTERACTION",
+                    DdiRule.severity_code == "NONE",
+                )
+            ).all()
+            if len(rules) != 3646:
+                raise H3ActivationError(
+                    "Jumlah pair tanpa interaksi tidak sesuai basis DDI terverifikasi."
+                )
+            already_active = sum(
+                rule.is_enabled and rule.activation_status == "ACTIVE" for rule in rules
+            )
+            now = utc_now()
+            for rule in rules:
+                rule.activation_status = "ACTIVE"
+                rule.is_enabled = True
+                rule.record_status = "PUBLISHED"
+                rule.clinical_review_resolved = True
+                rule.updated_by = actor.id
+                rule.validated_by_name = actor.display_name
+                rule.validated_at = now
+            self.audit.append(
+                session,
+                AuditEvent(
+                    category="KNOWLEDGE_BASE",
+                    action="DDI_NO_INTERACTION_REFERENCE_ACTIVATED",
+                    outcome="SUCCESS",
+                    actor_user_id=actor.id,
+                    entity_type="KNOWLEDGE_BASE_VERSION",
+                    entity_id=version.id,
+                    details={
+                        "policy": "DDI_REFERENCE_BASIS_V1",
+                        "reason": clean_reason,
+                        "activated_reference_pairs": len(rules) - already_active,
+                        "already_active_pairs": already_active,
+                        "alerts_created": 0,
+                    },
+                ),
+            )
+            session.commit()
+            return DdiReferenceBasisActivationResult(
+                version_id=version.id,
+                activated_reference_pairs=len(rules) - already_active,
+                already_active_pairs=already_active,
                 activated_by=actor.display_name,
             )
 
@@ -521,12 +603,21 @@ class H3ActivationService:
             row for row in payload["rules"]
             if row.get("activation_status") == "HOLD_CLINICAL_REVIEW_REQUIRED"
         ]
-        actual = session.scalars(
-            select(DdiRule).where(
-                DdiRule.knowledge_base_version_id == version.id,
-                DdiRule.activation_status == "HOLD_CLINICAL_REVIEW_REQUIRED",
-            )
-        ).all()
+        actual_by_key = {
+            row.pair_key: row
+            for row in session.scalars(
+                select(DdiRule).where(
+                    DdiRule.knowledge_base_version_id == version.id
+                )
+            ).all()
+        }
+        expected_keys = {str(row["pair_key"]) for row in expected}
+        actual = [actual_by_key[key] for key in expected_keys if key in actual_by_key]
+        held = [row for row in actual if row.activation_status == "HOLD_CLINICAL_REVIEW_REQUIRED"]
+        already_active = [
+            row for row in actual
+            if row.activation_status == "ACTIVE" and row.is_enabled
+        ]
         severity = Counter(row["severity_code"] for row in expected)
         expected_signature = cls._hold_signature(expected)
         actual_signature = cls._hold_signature(actual)
@@ -542,13 +633,15 @@ class H3ActivationService:
             row.interaction_status == "INTERACTION_FOUND"
             and row.severity_code != "NONE"
             and row.clinical_review_required
-            and not row.is_enabled
+            and row.activation_status in {"HOLD_CLINICAL_REVIEW_REQUIRED", "ACTIVE"}
+            and (not row.is_enabled or row.activation_status == "ACTIVE")
             and row.source_evidence_count > 0
             for row in actual
         )
         if (
             len(expected) != cls.EXPECTED_HELD_PAIRS
             or len(actual) != cls.EXPECTED_HELD_PAIRS
+            or len(held) + len(already_active) != cls.EXPECTED_HELD_PAIRS
             or dict(severity) != cls.EXPECTED_HOLD_SEVERITY
             or not structurally_valid
             or actual_signature != expected_signature
@@ -559,7 +652,8 @@ class H3ActivationService:
         return H5HoldValidationPreview(
             version_id=version.id,
             version_status=version.status,
-            hold_pairs=len(actual),
+            hold_pairs=len(held),
+            already_active_pairs=len(already_active),
             severity_counts=tuple(sorted(severity.items())),
             source_references=source_references,
             missing_source_reference_pairs=missing_source_reference_pairs,
@@ -631,6 +725,35 @@ class H3ActivationService:
         if version is None or version.version_code != DDI_BUNDLE_ID:
             raise H3ActivationError("Versi katalog DDI bawaan tidak ditemukan.")
         return version
+
+    @classmethod
+    def _operational_version(cls, session) -> KnowledgeBaseVersion:
+        """Resolve the current published LOCAL snapshot back to the bundle."""
+        bundled = cls._bundled_version(session)
+        if bundled.status == "PUBLISHED":
+            return bundled
+        versions = session.scalars(select(KnowledgeBaseVersion)).all()
+        by_id = {version.id: version for version in versions}
+        published = sorted(
+            (version for version in versions if version.status == "PUBLISHED"),
+            key=lambda version: (version.published_at or version.created_at, version.id),
+            reverse=True,
+        )
+        for candidate in published:
+            current = candidate
+            seen: set[str] = set()
+            while current.based_on_version_id and current.id not in seen:
+                if current.based_on_version_id == bundled.id:
+                    return candidate
+                seen.add(current.id)
+                current = by_id.get(current.based_on_version_id)
+                if current is None:
+                    break
+        if bundled.status == "DRAFT":
+            return bundled
+        raise H3ActivationError(
+            "Katalog aktif bukan turunan katalog DDI bawaan yang terverifikasi."
+        )
 
     @classmethod
     def _authorize(cls, session, actor_user_id: str) -> AppUser:

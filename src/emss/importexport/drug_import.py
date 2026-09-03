@@ -23,12 +23,14 @@ from emss.database.catalog_models import (
 )
 from emss.database.engine import DatabaseManager
 from emss.database.models import AppUser, UserRole
+from emss.domain.kfa import is_kfa_product_code
 from emss.importexport.tabular_reader import (
     CsvTableReader,
     TabularReadError,
     TabularSheet,
     XlsxTableReader,
 )
+from emss.normalization import canonical_khanza_code
 from emss.utils.time import utc_now
 
 
@@ -129,9 +131,10 @@ def normalize_name(value: Any) -> str:
 
 
 def normalize_code(value: Any) -> str:
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    return normalize_text(value)
+    code = normalize_text(value)
+    # KFA product identifiers are independent eight-digit identifiers and
+    # must never be reduced to a Khanza five-digit identity.
+    return code if is_kfa_product_code(code) else canonical_khanza_code(code)
 
 
 def parse_nonnegative_int(value: Any, field_name: str, errors: list[str]) -> int:
@@ -186,7 +189,8 @@ class DrugImportService:
             sheets = self._read_source(source)
             with self.database.session() as session:
                 existing_catalog = {
-                    drug.khanza_code: {
+                    canonical_khanza_code(drug.khanza_code): {
+                        "source_code": drug.khanza_code,
                         "display_name": drug.display_name,
                         "ingredients": sorted(
                             mapping.ingredient.normalized_name
@@ -642,6 +646,7 @@ class DrugImportService:
             normalized = {
                 "database_version": version,
                 "khanza_code": code,
+                "raw_khanza_code": normalize_text(raw.get("khanza_code")),
                 "display_name": display_name,
                 "normalized_name": normalized_source,
                 "source_ingredients": ingredients,
@@ -707,6 +712,7 @@ class DrugImportService:
             normalized = {
                 "database_version": version,
                 "khanza_code": code,
+                "raw_khanza_code": normalize_text(raw.get("khanza_code")),
                 "display_name": display_name,
                 "component_order": order,
                 "standard_active_ingredient": ingredient,
@@ -783,8 +789,23 @@ class DrugImportService:
                 continue
             drug = drug_rows[0]
             component_group = components.get(code, [])
+            existing = existing_catalog.get(code)
+            # A code-width alias may only reuse a historic mapping when it is
+            # demonstrably the same medicine and active-ingredient set.
+            # Otherwise leave both records intact and make the reviewer decide.
+            if (existing is not None
+                    and existing["source_code"] != drug.normalized["raw_khanza_code"]):
+                expected = sorted(drug.normalized["source_ingredients"])
+                if existing["ingredients"] != expected:
+                    drug.errors.append(
+                        "Konflik kode Khanza: lima digit terakhir sama tetapi nama obat atau kandungan aktif berbeda; verifikasi diperlukan"
+                    )
+                    for row in component_group:
+                        row.errors.append(
+                            "Konflik kode Khanza pada master; komponen tidak dipetakan otomatis"
+                        )
+                    continue
             if not component_group and drug.normalized["component_count"] > 0:
-                existing = existing_catalog.get(code)
                 expected = sorted(drug.normalized["source_ingredients"])
                 if existing is None or existing["ingredients"] != expected:
                     drug.errors.append(
@@ -839,21 +860,12 @@ class DrugImportService:
                         row.errors.append(
                             "Master obat tidak tersedia dalam file atau database"
                         )
-                else:
-                    for row in component_rows:
-                        if (
-                            normalize_name(row.normalized["display_name"])
-                            != normalize_name(existing["display_name"])
-                        ):
-                            row.errors.append(
-                                "Nama obat komponen tidak konsisten dengan master database"
-                            )
 
     def _assign_actions(
         self, session, candidates: list[_Candidate]
     ) -> None:
         existing_drugs = {
-            row.khanza_code: row
+            canonical_khanza_code(row.khanza_code): row
             for row in session.scalars(select(DrugMaster)).all()
         }
         for candidate in candidates:
@@ -895,11 +907,14 @@ class DrugImportService:
     def _upsert_drug(
         self, session, data: dict[str, Any], batch_id: str
     ) -> tuple[DrugMaster, str]:
-        drug = session.scalar(
-            select(DrugMaster).where(
-                DrugMaster.khanza_code == data["khanza_code"]
+        matches = [row for row in session.scalars(select(DrugMaster)).all()
+                   if canonical_khanza_code(row.khanza_code) == data["khanza_code"]]
+        compatible = [row for row in matches if row.normalized_name == data["normalized_name"]]
+        if matches and not compatible:
+            raise DrugImportError(
+                "Konflik kode Khanza: lima digit terakhir sama tetapi nama obat berbeda; verifikasi diperlukan"
             )
-        )
+        drug = compatible[0] if compatible else None
         if drug is None:
             drug = DrugMaster(
                 khanza_code=data["khanza_code"],

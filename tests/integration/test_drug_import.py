@@ -178,6 +178,25 @@ def test_csv_can_add_unmapped_master(tmp_path, app_container):
 
 
 @pytest.mark.integration
+def test_mapping_preview_marks_padded_code_with_different_ingredients_as_conflict(tmp_path, app_container):
+    admin = _admin(app_container)
+    with app_container.database.session() as session:
+        session.add(DrugMaster(
+            khanza_code="000000001", display_name="OBAT KOMBINASI",
+            normalized_name="obat kombinasi", source_version="HISTORICAL",
+            source_mapping_status="UNMAPPED", review_status="PENDING_REVIEW",
+            mapping_method="HISTORICAL", component_count=0,
+        ))
+        session.commit()
+    drugs, components = valid_test_rows()
+    preview = app_container.drug_import.preview(
+        write_drug_workbook(tmp_path / "conflicting-padding.xlsx", drugs, components), admin.id
+    )
+    assert not preview.commit_allowed
+    assert any("Konflik kode Khanza" in issue.message for issue in preview.issues)
+
+
+@pytest.mark.integration
 def test_catalog_search_and_batch_history(tmp_path, app_container):
     admin = _admin(app_container)
     drugs, components = valid_test_rows()

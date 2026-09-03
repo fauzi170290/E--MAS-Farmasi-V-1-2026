@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 - 2026-09-02
+
+- Serialize local database sessions so background monitoring cannot fork the audit hash chain.
+- Resolve H5 HOLD activation against the active published LOCAL snapshot derived from the verified DDI bundle.
+- Activate assessed no-interaction pairs as a documented no-alert screening reference after named KFT action.
+
 ## 1.0.1 - 2026-09-02
 
 - Menambahkan keputusan KFT bernama dan audit berantai untuk aktivasi cohort 175 pair DDI berstatus HOLD.

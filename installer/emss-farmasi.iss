@@ -1,5 +1,5 @@
 #define MyAppName "E-MAS Farmasi"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "Tim E-MAS Farmasi"
 #define MyAppExeName "E-MAS Farmasi.exe"
 #ifndef AppDistDir

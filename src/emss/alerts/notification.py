@@ -38,8 +38,12 @@ def notification_decision(screening, pairs, issues, *, validated=False, validate
         duplicate_message += '\n' + '\n'.join(
             message.removeprefix(DUPLICATE_MESSAGE).strip() for message in duplicate_details)
     high_alert = validated and any(getattr(i, 'issue_type', '') == 'HIGH_ALERT' for i in issues)
+    # CROSS_RX_CONTEXT is an informational provenance note.  It must not
+    # suppress the clear sound unless it also emits a concrete positive
+    # interaction/duplicate/high-alert or completeness finding.
+    blocking_issues = [i for i in issues if getattr(i, 'issue_type', '') != 'CROSS_RX_CONTEXT']
     clear = (validated and screening.risk_status == 'SAFE'
-        and screening.completeness_status == 'COMPLETE' and not issues
+        and screening.completeness_status == 'COMPLETE' and not blocking_issues
         and screening.ingredient_count > 0 and screening.interaction_count == 0
         and screening.not_assessed_count == 0 and screening.unmapped_drug_count == 0
         and screening.pair_count == screening.assessed_no_interaction_count

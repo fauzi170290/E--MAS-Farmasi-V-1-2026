@@ -4,10 +4,11 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
-from emss.database.catalog_models import DrugComponentMapping, DrugMaster
+from emss.database.catalog_models import ActiveIngredient, DrugComponentMapping, DrugMaster
 from emss.database.knowledge_models import DdiRule, KnowledgeBaseVersion
 from emss.database.models import AuditLog
 from emss.services.h3_activation import H3ActivationError
+from emss.services.knowledge import ManualDdiRule
 from test_screening_engine import _admin, _prescription
 
 
@@ -229,6 +230,89 @@ def test_h5_activates_all_hold_pairs_after_named_validation(app_container):
         )
         assert activation_audit is not None
         assert container.audit.verify_chain(session)
+
+
+@pytest.mark.integration
+def test_assessed_no_interaction_pairs_become_safe_reference_not_alert(app_container):
+    container = app_container
+    admin = _prepare(container)
+    container.h3_activation.activate(admin.id, "Validasi H3 sebelum basis referensi aman")
+
+    result = container.h3_activation.activate_no_interaction_reference_basis(
+        admin.id, "Keputusan KFT mengaktifkan basis pemeriksaan aman"
+    )
+    assert result.activated_reference_pairs == 3646
+    assert result.already_active_pairs == 0
+    with container.database.session() as session:
+        assert session.execute(
+            text("SELECT COUNT(*) FROM ddi_rule WHERE interaction_status="
+                 "'ASSESSED_NO_INTERACTION' AND severity_code='NONE' "
+                 "AND activation_status='ACTIVE' AND is_enabled=1")
+        ).scalar_one() == 3646
+        assert session.execute(
+            text("SELECT COUNT(*) FROM ddi_rule WHERE interaction_status="
+                 "'ASSESSED_NO_INTERACTION' AND app_severity IS NOT NULL")
+        ).scalar_one() == 0
+        assert session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "DDI_NO_INTERACTION_REFERENCE_ACTIVATED"
+            )
+        ) is not None
+        assert container.audit.verify_chain(session)
+
+
+@pytest.mark.integration
+def test_h5_uses_published_local_snapshot_and_preserves_previously_active_hold(app_container):
+    container = app_container
+    admin = _prepare(container)
+    activated = container.h3_activation.activate(
+        admin.id, "Validasi H3 sebelum perubahan pair lokal"
+    )
+    with container.database.session() as session:
+        active = session.scalar(select(DdiRule).where(
+            DdiRule.knowledge_base_version_id == activated.version_id,
+            DdiRule.activation_status == "ACTIVE",
+        ))
+        low = session.get(ActiveIngredient, active.ingredient_low_id).standard_name
+        high = session.get(ActiveIngredient, active.ingredient_high_id).standard_name
+        data = ManualDdiRule(
+            version_id=activated.version_id, ingredient_a=low, ingredient_b=high,
+            interaction_status=active.interaction_status,
+            severity_code=active.severity_code, source_name=active.source_name,
+            source_reference=active.source_reference, source_accessed_at=active.source_accessed_at,
+            clinical_effect=active.clinical_effect or "", recommendation=active.recommendation or "",
+            monitoring=active.monitoring or "", mechanism=active.mechanism or "",
+            population_risk=active.population_risk or "", notes=active.notes or "",
+        )
+        active_rule_id = active.id
+    container.reference.save_pair(
+        data, admin.id, expected_version_id=activated.version_id,
+        edit_rule_id=active_rule_id, active=True,
+    )
+    with container.database.session() as session:
+        local = session.scalar(select(KnowledgeBaseVersion).where(
+            KnowledgeBaseVersion.status == "PUBLISHED",
+            KnowledgeBaseVersion.version_code.like("LOCAL-%"),
+        ))
+        held = session.scalar(select(DdiRule).where(
+            DdiRule.knowledge_base_version_id == local.id,
+            DdiRule.activation_status == "HOLD_CLINICAL_REVIEW_REQUIRED",
+        ))
+        held.activation_status, held.is_enabled = "ACTIVE", True
+        held.clinical_review_resolved = True
+        session.commit()
+
+    preview = container.h3_activation.preview_hold_cohort()
+    assert (preview.version_id, preview.hold_pairs, preview.already_active_pairs) == (
+        local.id, 174, 1
+    )
+    container.h3_activation.validate_hold_cohort(
+        admin.id, "Validasi KFT pada snapshot lokal terpublikasi"
+    )
+    result = container.h3_activation.activate_hold_cohort(
+        admin.id, "Aktivasi HOLD tersisa pada snapshot lokal"
+    )
+    assert (result.activated_hold_pairs, result.already_active_pairs, result.active_pairs) == (174, 1, 554)
 
 
 @pytest.mark.integration

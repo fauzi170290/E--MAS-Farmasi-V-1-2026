@@ -11,6 +11,7 @@ from emss.database.catalog_models import (
     ImportBatch,
 )
 from emss.database.engine import DatabaseManager
+from emss.normalization import canonical_khanza_code
 
 
 @dataclass(frozen=True)
@@ -124,10 +125,7 @@ class DrugCatalogService:
         for row in rows:
             code = row.khanza_code.strip()
             numeric = code.isdigit()
-            identity = (
-                row.normalized_name,
-                (code.lstrip('0') or '0') if numeric else code,
-            )
+            identity = (row.normalized_name, canonical_khanza_code(code))
             previous = selected.get(identity)
             if previous is None:
                 selected[identity] = row

@@ -267,6 +267,32 @@ def test_final_prescription_detects_recent_duplicate_from_internal_history(app_c
 
 
 @pytest.mark.integration
+def test_prescription_matches_zero_padded_khanza_code_with_name_variant(app_container):
+    admin = _admin(app_container)
+    version_id, codes = _seed(app_container, admin.id)
+    with app_container.database.session() as session:
+        drugs = session.scalars(select(DrugMaster).where(DrugMaster.khanza_code.in_(codes))).all()
+        by_code = {drug.khanza_code: drug for drug in drugs}
+        first, second = by_code[codes[0]], by_code[codes[1]]
+        first.khanza_code, first.display_name, first.normalized_name = '03795', 'Obat A', 'obat a'
+        second.khanza_code, second.display_name, second.normalized_name = '00012', 'Obat B', 'obat b'
+        session.commit()
+    matched = PrescriptionInput(no_resep='RX-PADDED', items=(
+        PrescriptionItemInput('1', '000003795', 'Obat A', '1', '', '', ''),
+        PrescriptionItemInput('2', '12', 'Obat B', '1', '', '', ''),
+    ))
+    screening = app_container.screening.screen(matched, admin.id, version_id=version_id)
+    assert screening.completeness_status == 'COMPLETE'
+
+    conflict = PrescriptionInput(no_resep='RX-PADDED-CONFLICT', items=(
+        PrescriptionItemInput('1', '3795', 'Obat Lain', '1', '', '', ''),
+        PrescriptionItemInput('2', '12', 'Obat B', '1', '', '', ''),
+    ))
+    result = app_container.screening.screen(conflict, admin.id, version_id=version_id)
+    assert result.completeness_status == 'COMPLETE'
+
+
+@pytest.mark.integration
 def test_combination_components_are_not_checked_against_each_other(
     app_container,
 ) -> None:

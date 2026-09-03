@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+from threading import RLock
 from typing import Iterator
 
 from alembic import command
@@ -23,6 +24,9 @@ class DatabaseManager:
             expire_on_commit=False,
             autoflush=False,
         )
+        # One local transaction at a time keeps the append-only audit chain
+        # linear when background monitoring and UI actions occur together.
+        self._session_lock = RLock()
 
     def _create_engine(self) -> Engine:
         engine = create_engine(
@@ -47,14 +51,15 @@ class DatabaseManager:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        db_session = self.session_factory()
-        try:
-            yield db_session
-        except Exception:
-            db_session.rollback()
-            raise
-        finally:
-            db_session.close()
+        with self._session_lock:
+            db_session = self.session_factory()
+            try:
+                yield db_session
+            except Exception:
+                db_session.rollback()
+                raise
+            finally:
+                db_session.close()
 
     def migrate(self, revision: str = "head") -> None:
         config = self._alembic_config()

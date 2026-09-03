@@ -287,6 +287,8 @@ class ReferencePairsPanel(QWidget):
         self.activate_hold_button = QPushButton("Aktifkan 175 Pair HOLD (Keputusan KFT)")
         self.activate_hold_button.setObjectName("primary")
         self.activate_hold_button.clicked.connect(self.activate_h5_hold)
+        self.activate_reference_basis_button = QPushButton("Aktifkan Basis Referensi Aman (3.646 Pair)")
+        self.activate_reference_basis_button.clicked.connect(self.activate_reference_basis)
         refresh = QPushButton("Muat Ulang")
         refresh.clicked.connect(self.refresh)
         detail = QPushButton("Lihat Referensi")
@@ -294,7 +296,7 @@ class ReferencePairsPanel(QWidget):
         archive = QPushButton("Arsip versi / draft lama")
         archive.clicked.connect(self.archive)
         actions = QHBoxLayout()
-        for button in (self.activate_button, self.activate_hold_button, self.new_button,
+        for button in (self.activate_button, self.activate_hold_button, self.activate_reference_basis_button, self.new_button,
                        self.edit_button, detail, refresh, archive):
             actions.addWidget(button)
         layout = QVBoxLayout(self)
@@ -310,13 +312,32 @@ class ReferencePairsPanel(QWidget):
         published = bool(version and version["status"] == "PUBLISHED")
         self.edit_button.setEnabled(can_manage(self.user) and published)
         self.activate_button.setEnabled(can_manage(self.user) and bool(version) and not published)
-        active_count = sum(row.is_enabled and row.activation_status == "ACTIVE" for row in rows)
+        active_count = sum(
+            row.interaction_status == "INTERACTION_FOUND"
+            and row.is_enabled and row.activation_status == "ACTIVE"
+            for row in rows
+        )
+        active_reference_count = sum(
+            row.interaction_status == "ASSESSED_NO_INTERACTION"
+            and row.is_enabled and row.activation_status == "ACTIVE"
+            for row in rows
+        )
         hold_count = sum(
             row.activation_status == "HOLD_CLINICAL_REVIEW_REQUIRED" for row in rows
         )
+        reference_basis_count = sum(
+            row.interaction_status == "ASSESSED_NO_INTERACTION"
+            and row.severity_code == "NONE"
+            and not (row.is_enabled and row.activation_status == "ACTIVE")
+            for row in rows
+        )
         self.activate_hold_button.setEnabled(can_manage(self.user) and published and hold_count > 0)
+        self.activate_reference_basis_button.setEnabled(
+            can_manage(self.user) and published and reference_basis_count > 0
+        )
         self.summary_label.setText(
-            (f"Master aktif · {active_count} pair positif aktif dari {len(rows)} pair. "
+            (f"Master aktif · {active_count} pair positif aktif; "
+             f"{active_reference_count} pair basis aman dari {len(rows)} pair. "
              "Aktif / Nonaktif tidak mengubah hasil lama."
                 if published else
              f"Katalog bawaan terpulihkan · {len(rows)} pair ditampilkan · status DRAFT/Belum aktif. "
@@ -429,6 +450,42 @@ class ReferencePairsPanel(QWidget):
             f"{result.activated_hold_pairs} pair HOLD telah aktif. "
             f"Total pair aktif: {result.active_pairs}.\n"
             f"Validator: {result.activated_by}.{reference_note}",
+        )
+
+    def activate_reference_basis(self):
+        if not can_manage(self.user):
+            return
+        confirmation = (
+            "Aktifkan 3.646 pair yang sudah dinilai TIDAK BERINTERAKSI sebagai "
+            "basis pemeriksaan aman?\n\nPair ini tidak membuat popup DDI atau "
+            "alarm risiko. Hasil skrining akan dapat menyatakan bahwa tidak ditemukan "
+            "interaksi pada basis yang dinilai."
+        )
+        if QMessageBox.question(
+            self, "Aktivasi basis referensi DDI", confirmation
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        reason, accepted = QInputDialog.getText(
+            self,
+            "Catatan keputusan KFT",
+            "Dasar aktivasi basis referensi aman (minimal 8 karakter):",
+        )
+        if not accepted:
+            return
+        try:
+            result = self.container.h3_activation.activate_no_interaction_reference_basis(
+                self.user.id, reason
+            )
+        except KnowledgeError as exc:
+            QMessageBox.warning(self, "Aktivasi basis dihentikan", str(exc))
+            return
+        self.refresh()
+        self.changed.emit()
+        QMessageBox.information(
+            self,
+            "Basis referensi aktif",
+            f"{result.activated_reference_pairs} pair tanpa interaksi telah aktif "
+            f"sebagai basis pemeriksaan tanpa alert. Validator: {result.activated_by}.",
         )
 
     def add_pair(self, drug_id=""):

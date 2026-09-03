@@ -26,6 +26,15 @@ def test_clear_requires_explicit_complete_assessment_and_validation():
     assert notification_decision(result, [pair], [], validated=True)[1] == ''
 
 
+def test_informational_cross_prescription_context_does_not_block_clear_audio():
+    result = clear_result()
+    pair = Obj(classification='ASSESSED_NO_INTERACTION', severity_code='NONE')
+    context = Obj(issue_type='CROSS_RX_CONTEXT', message='Riwayat informasional')
+    decision, category = notification_decision(result, [pair], [context], validated=True)
+    assert category == 'screening-clear'
+    assert decision.notify
+
+
 def test_critical_safety_warning_is_not_a_contraindication_sound():
     result = clear_result()
     result.risk_status = 'CRITICAL'

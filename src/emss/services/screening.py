@@ -33,6 +33,7 @@ from emss.domain.screening import (
     prescription_hash,
 )
 from emss.importexport.drug_import import normalize_code, normalize_text
+from emss.normalization import canonical_khanza_code
 from emss.services.medication_safety import (
     MedicationSafetyService,
     SafetyPrescriptionItem,
@@ -721,19 +722,28 @@ class DdiScreeningService:
         drugs = session.scalars(
             select(DrugMaster)
             .options(
+                selectinload(DrugMaster.aliases),
                 selectinload(DrugMaster.components).selectinload(
                     DrugComponentMapping.ingredient
                 )
             )
             .where(
-                or_(
-                    DrugMaster.khanza_code.in_(codes),
-                    DrugMaster.kfa_product_code.in_(kfa_codes) if kfa_codes else False,
-                ),
                 DrugMaster.is_active.is_(True),
             )
         ).all()
-        by_code = {drug.khanza_code: drug for drug in drugs}
+        # Do this comparison in Python so SQLite and MariaDB behave identically
+        # for legacy codes of different widths.  The master is bounded by the
+        # existing sync limit and no source value is rewritten here.
+        by_code: dict[str, DrugMaster] = {}
+        conflicts: set[str] = set()
+        for code in codes:
+            candidates = [drug for drug in drugs if canonical_khanza_code(drug.khanza_code) == code]
+            names = {drug.normalized_name for drug in candidates}
+            signatures = {tuple(sorted(mapping.ingredient_id for mapping in drug.components)) for drug in candidates}
+            if len(names) > 1 or len(signatures) > 1:
+                conflicts.add(code)
+            elif candidates:
+                by_code[code] = sorted(candidates, key=lambda row: (len(row.khanza_code), row.khanza_code), reverse=True)[0]
         kfa_matches: dict[str, list[DrugMaster]] = {}
         for drug in drugs:
             if drug.kfa_product_code:
@@ -752,6 +762,14 @@ class DdiScreeningService:
         result: list[_MappedItem] = []
         issues: list[ScreeningIssueResult] = []
         for item in items:
+            if item.khanza_code in conflicts:
+                result.append(_MappedItem(item, "DATA_INCOMPLETE", ()))
+                issues.append(ScreeningIssueResult(
+                    issue_type="DATA_INCOMPLETE", khanza_code=item.khanza_code,
+                    display_name=item.display_name,
+                    message="Konflik kode Khanza: lima digit terakhir sama tetapi nama obat atau kandungan aktif berbeda; verifikasi Master Obat.",
+                ))
+                continue
             if item.khanza_code in ambiguous_kfa:
                 result.append(_MappedItem(item, "DATA_INCOMPLETE", ()))
                 issues.append(ScreeningIssueResult(
@@ -761,6 +779,9 @@ class DdiScreeningService:
                 ))
                 continue
             drug = by_code.get(item.khanza_code)
+            # With a unique canonical five-digit code, source display names
+            # are only corroborating text (e.g. a trailing TAB or a language
+            # variant).  Ingredient-signature conflicts above remain blocking.
             if drug is None:
                 result.append(_MappedItem(item, "UNMAPPED", ()))
                 issues.append(
