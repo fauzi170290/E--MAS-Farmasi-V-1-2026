@@ -9,6 +9,8 @@ from pathlib import Path
 RATE = 44_100
 OUT = Path(__file__).resolve().parents[1] / "src" / "emss" / "assets" / "audio"
 PATTERNS = {
+    "minor": ((660, .15), (0, .12), (550, .25)),
+    "screening-incomplete": ((440, .22), (0, .18), (440, .22), (0, .18), (330, .35)),
     # Descending urgent phrases are deliberately unlike the rising clear phrase.
     "contraindicated": ((880, .22), (0, .08), (660, .22), (0, .08), (440, .42)),
     "major": ((740, .20), (0, .10), (740, .20), (0, .10), (554, .32)),

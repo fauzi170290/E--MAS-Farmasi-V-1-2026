@@ -1,0 +1,988 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Web;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+internal static partial class KhanzaBridge
+{
+    private const string Dll = "windowsaccessbridge-32.dll";
+    private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
+    private static readonly object OutputLock = new object();
+    private static int _dirty = 1;
+    private static string _lastFingerprint = "";
+    private static string _lastPrescription = "";
+    private static string _lastInvalid = "";
+    private static string _lastConnectionState = "";
+    private static string _lastDiagnostic = "";
+    private static string _pendingNoResep = "";
+    private static string _pendingNoRawat = "";
+    private static string _pendingPatientId = "";
+    private static string _pendingPatientName = "";
+    private static string _pendingPrescriberName = "";
+    private static string _pendingCareSetting = "";
+    private static DateTime _pendingIdentityAt = DateTime.MinValue;
+    private static readonly Regex CareIdPattern = new Regex(
+        @"\b\d{4}/\d{2}/\d{2}/\d{6}\b", RegexOptions.CultureInvariant);
+    private static readonly Regex PrescriptionIdPattern = new Regex(
+        @"(?<!\d)\d{12}(?!\d)", RegexOptions.CultureInvariant);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetDllDirectory(string path);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern void Windows_run();
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool isJavaWindow(IntPtr window);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool getAccessibleContextFromHWND(IntPtr window, out int vm, out long context);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool getAccessibleContextInfo(int vm, long context, out ContextInfo info);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern long getAccessibleChildFromContext(int vm, long context, int index);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern void releaseJavaObject(int vm, long context);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool getAccessibleTableInfo(int vm, long context, out TableInfo info);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool getAccessibleTableColumnHeader(int vm, long context, out TableInfo info);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool getAccessibleTableCellInfo(int vm, long table, int row, int column, out CellInfo info);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern int getAccessibleTableRowSelectionCount(int vm, long table);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool isAccessibleTableRowSelected(int vm, long table, int row);
+    private delegate bool WindowCallback(IntPtr window, IntPtr state);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool EnumWindows(WindowCallback callback, IntPtr state);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void SimpleEvent(int vm, long evt, long source);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void TextEvent(int vm, long evt, long source, IntPtr oldValue, IntPtr newValue);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void ShutdownEvent(int vm);
+    [DllImport(Dll, EntryPoint = "setFocusGainedFP", CallingConvention = CallingConvention.Cdecl)] private static extern void SetFocusGained(SimpleEvent callback);
+    [DllImport(Dll, EntryPoint = "setPropertySelectionChangeFP", CallingConvention = CallingConvention.Cdecl)] private static extern void SetSelection(SimpleEvent callback);
+    [DllImport(Dll, EntryPoint = "setPropertyVisibleDataChangeFP", CallingConvention = CallingConvention.Cdecl)] private static extern void SetVisibleData(SimpleEvent callback);
+    [DllImport(Dll, EntryPoint = "setPropertyTableModelChangeFP", CallingConvention = CallingConvention.Cdecl)] private static extern void SetTableModel(TextEvent callback);
+    [DllImport(Dll, EntryPoint = "setPropertyValueChangeFP", CallingConvention = CallingConvention.Cdecl)] private static extern void SetValue(TextEvent callback);
+    [DllImport(Dll, EntryPoint = "setJavaShutdownFP", CallingConvention = CallingConvention.Cdecl)] private static extern void SetJavaShutdown(ShutdownEvent callback);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ContextInfo
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] public string name;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] public string description;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string role;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string roleUS;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string states;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string statesUS;
+        public int index, children, x, y, width, height, component, action, selection, text, interfaces;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TableInfo
+    {
+        public long caption, summary;
+        public int rows, columns;
+        public long context, table;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CellInfo
+    {
+        public long context;
+        public int index, row, column, rowExtent, columnExtent;
+        public byte selected;
+    }
+
+    private sealed class Item
+    {
+        public string source_item_key = "";
+        public string drug_code = "";
+        public string drug_name = "";
+        public string raw_quantity = "";
+        public string raw_signa = "";
+        public string compound_group = "";
+    }
+
+    private sealed class Candidate
+    {
+        public string NoResep = "";
+        public string NoRawat = "";
+        public string PatientId = "";
+        public string PatientName = "";
+        public string PrescriberName = "";
+        public readonly List<Item> Regular = new List<Item>();
+        public readonly List<List<Item>> CompoundTables = new List<List<Item>>();
+        public int CompoundGroups;
+        public bool DetailFound;
+        public bool Accessible;
+        public bool KhanzaDetected;
+        public string DetailNoRawat = "";
+        public bool DetailIdentityAmbiguous;
+        public string CareSetting = "";
+        public bool CareSettingAmbiguous;
+        public bool AmbiguousIdentity;
+        public bool ReadError;
+        public long ScanMilliseconds;
+        public int NodesRead;
+        public int VisibleJavaWindows;
+        public int OverlayRawPositiveRows;
+        public int OverlayClippedPositiveRows;
+        public int OverlayDerivedRows;
+        public readonly Dictionary<Item, OverlayRow> OverlayRows = new Dictionary<Item, OverlayRow>();
+        public readonly List<OverlayProbeTable> OverlayProbeTables = new List<OverlayProbeTable>();
+        public readonly Dictionary<long, int[]> OverlayProbeWindows = new Dictionary<long, int[]>();
+        public DateTime ScanStarted = DateTime.UtcNow;
+
+        public bool Complete
+        {
+            get
+            {
+                return !ReadError && !AmbiguousIdentity && !DetailIdentityAmbiguous &&
+                    !CareSettingAmbiguous && CareSetting.Length > 0 &&
+                    NoResep.Length > 0 && NoRawat.Length > 0 &&
+                    DetailFound && Regular.Count + CompoundItemCount > 0 &&
+                    (CompoundGroups == 0 ? CompoundTables.Count == 0 : CompoundTables.Count == CompoundGroups);
+            }
+        }
+
+        public int CompoundItemCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (List<Item> rows in CompoundTables) count += rows.Count;
+                return count;
+            }
+        }
+    }
+
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        _overlayEnabled = Array.IndexOf(args, "--overlay-poc") >= 0;
+        _overlayProbe = _overlayEnabled && Environment.GetEnvironmentVariable("EMAS_OVERLAY_UAT_DIAGNOSTICS") == "1";
+        if (_overlayEnabled) ConfigureOverlayDpiAwareness();
+        if (IntPtr.Size != 4)
+        {
+            EmitStatus("ERROR", "BRIDGE_REQUIRES_X86");
+            return 2;
+        }
+        if (Array.IndexOf(args, "--self-test") >= 0)
+        {
+            bool passed = RunSelfTest();
+            EmitStatus(passed ? "SELF_TEST_PASS" : "ERROR",
+                passed ? "X86_JSON_AND_QUANTITY_FILTER_READY" : "QUANTITY_FILTER_FAILED");
+            return passed ? 0 : 4;
+        }
+        try
+        {
+            string dll = FindBridgeDll();
+            if (dll.Length == 0 || !SetDllDirectory(Path.GetDirectoryName(dll)))
+            {
+                EmitStatus("ERROR", "JAB_DLL_NOT_FOUND");
+                return 3;
+            }
+            Windows_run();
+            Stopwatch warmup = Stopwatch.StartNew();
+            while (warmup.ElapsedMilliseconds < 2500) { Application.DoEvents(); Thread.Sleep(10); }
+
+            SimpleEvent focus = OnFocusEvent;
+            SimpleEvent selection = OnSelectionEvent;
+            SimpleEvent visible = OnVisibleDataEvent;
+            TextEvent table = OnTableModelEvent;
+            TextEvent value = OnValueEvent;
+            ShutdownEvent shutdown = OnShutdown;
+            SetFocusGained(focus);
+            SetSelection(selection);
+            SetVisibleData(visible);
+            SetTableModel(table);
+            SetValue(value);
+            SetJavaShutdown(shutdown);
+            EmitStatus("READY", "JAB_ACTIVE");
+            if (_overlayProbe) EmitProbeRuntime();
+
+            Stopwatch fallback = Stopwatch.StartNew();
+            while (true)
+            {
+                Application.DoEvents();
+                FlushOverlayClear();
+                bool shouldScan = Interlocked.Exchange(ref _dirty, 0) != 0 || fallback.ElapsedMilliseconds >= 1000;
+                if (!shouldScan) { Thread.Sleep(10); continue; }
+                fallback.Restart();
+                // A short debounce lets the Swing detail finish the current event
+                // burst. Two independent reads below remain the stability gate.
+                Thread.Sleep(50);
+                Candidate first = Scan();
+                Thread.Sleep(50);
+                Candidate second = Scan();
+                BindStableQueueIdentity(first, second);
+                InvalidateIfChanged(first);
+                Interlocked.Exchange(ref _dirty, 0); // Ignore read-induced accessibility chatter.
+                // The two complete reads above already prove the current JAB
+                // state. Do not let callbacks caused by those reads clear the
+                // geometry that is about to be published.
+                Interlocked.Exchange(ref _overlayClearPending, 0);
+                _overlayRevision = "";
+                Publish(first, second);
+                if (_overlayEnabled) { try { PublishOverlay(first, second); } catch { ClearOverlay(); } }
+                if (_overlayProbe) { try { PublishOverlayProbe(first, second); } catch { EmitProbeFailure(); } }
+                GC.KeepAlive(focus); GC.KeepAlive(selection); GC.KeepAlive(visible);
+                GC.KeepAlive(table); GC.KeepAlive(value); GC.KeepAlive(shutdown);
+            }
+        }
+        catch (Exception exc)
+        {
+            EmitStatus("ERROR", exc.GetType().Name);
+            return 1;
+        }
+    }
+
+    private static void MarkDirtyAndRelease(int vm, long evt, long source)
+    {
+        Interlocked.Exchange(ref _dirty, 1);
+        if (evt != 0) releaseJavaObject(vm, evt);
+        if (source != 0) releaseJavaObject(vm, source);
+    }
+
+    private static void OnFocusEvent(int vm, long evt, long source)
+    {
+        // Focus moves between Swing children during normal use and does not
+        // change row geometry or prescription identity. It still requests a
+        // fresh scan, but must not blank an already proven overlay.
+        MarkDirtyAndRelease(vm, evt, source);
+    }
+
+    private static void OnSelectionEvent(int vm, long evt, long source)
+    {
+        if (_overlayEnabled) QueueOverlayClear("JAB_SELECTION_CHANGED");
+        MarkDirtyAndRelease(vm, evt, source);
+    }
+
+    private static void OnVisibleDataEvent(int vm, long evt, long source)
+    {
+        if (_overlayEnabled) QueueOverlayClear("JAB_VISIBLE_DATA_CHANGED");
+        MarkDirtyAndRelease(vm, evt, source);
+    }
+
+    private static void OnTableModelEvent(int vm, long evt, long source, IntPtr oldValue, IntPtr newValue)
+    {
+        if (_overlayEnabled) QueueOverlayClear("JAB_TABLE_MODEL_CHANGED");
+        MarkDirtyAndRelease(vm, evt, source);
+    }
+
+    private static void OnValueEvent(int vm, long evt, long source, IntPtr oldValue, IntPtr newValue)
+    {
+        if (_overlayEnabled) QueueOverlayClear("JAB_VALUE_CHANGED");
+        MarkDirtyAndRelease(vm, evt, source);
+    }
+
+    private static void OnShutdown(int vm)
+    {
+        _lastFingerprint = "";
+        _lastPrescription = "";
+        ClearPendingIdentity();
+        Interlocked.Exchange(ref _dirty, 1);
+        EmitStatus("DISCONNECTED", "JAVA_SHUTDOWN");
+    }
+
+    private static Candidate Scan()
+    {
+        Candidate result = new Candidate();
+        HashSet<string> tables = new HashSet<string>(StringComparer.Ordinal);
+        Stopwatch timer = Stopwatch.StartNew();
+        int nodes = 0;
+        int visibleJavaWindows = 0;
+        WindowCallback callback = delegate(IntPtr window, IntPtr state)
+        {
+            // EnumWindows includes numerous hidden Swing helper/owner windows.
+            // They cannot contain the operator-visible prescription and made
+            // every stability pair traverse the same inaccessible UI repeatedly.
+            if (!IsWindowVisible(window)) return true;
+            uint pid;
+            GetWindowThreadProcessId(window, out pid);
+            string processName;
+            try { using (Process process = Process.GetProcessById((int)pid)) processName = process.ProcessName; }
+            catch { return true; }
+            if ((!String.Equals(processName, "java", StringComparison.OrdinalIgnoreCase) &&
+                !String.Equals(processName, "javaw", StringComparison.OrdinalIgnoreCase)) || !isJavaWindow(window)) return true;
+            visibleJavaWindows++;
+            int vm; long context;
+            if (!getAccessibleContextFromHWND(window, out vm, out context)) return true;
+            result.Accessible = true;
+            try { Walk(result, tables, vm, context, 0, timer, ref nodes, window, null, false, null); }
+            finally { Release(vm, context); }
+            // Once one complete detail subtree has been read, additional visible
+            // Swing helper/owner windows cannot add clinical rows. Stop this
+            // scan early; the second independent scan remains mandatory.
+            if (HasCompleteDetailPayload(result)) return false;
+            return timer.ElapsedMilliseconds < 1500 && nodes < 5000;
+        };
+        EnumWindows(callback, IntPtr.Zero);
+        GC.KeepAlive(callback);
+        result.ScanMilliseconds = timer.ElapsedMilliseconds;
+        result.NodesRead = nodes;
+        result.VisibleJavaWindows = visibleJavaWindows;
+        if (timer.ElapsedMilliseconds >= 1500 || nodes >= 5000) result.ReadError = true;
+        return result;
+    }
+
+    private static void Walk(Candidate result, HashSet<string> seenTables, int vm, long context,
+        int depth, Stopwatch timer, ref int nodes, IntPtr window, int[] clip, bool viewport,
+        int[] viewportRect,
+        List<OverlayProbeNode> path = null)
+    {
+        if (depth > 30 || nodes >= 5000 || timer.ElapsedMilliseconds >= 1500) { result.ReadError = true; return; }
+        ContextInfo info;
+        if (!getAccessibleContextInfo(vm, context, out info)) { result.ReadError = true; return; }
+        nodes++;
+        if (_overlayProbe) {
+            path = path == null ? new List<OverlayProbeNode>() : new List<OverlayProbeNode>(path);
+            path.Add(new OverlayProbeNode { role = ProbeRole(info.roleUS), rect = RawBounds(info) });
+        }
+        ObserveCareSetting(result, info);
+        if (_overlayEnabled) {
+            clip = ClipAccessible(clip, info);
+            viewport = viewport || info.roleUS == "viewport";
+            if (info.roleUS == "viewport" && info.width > 0 && info.height > 0)
+                viewportRect = Bounds(info);
+        }
+        if (info.roleUS == "table")
+        {
+            ReadTable(result, seenTables, vm, context, window, clip, viewport,
+                Bounds(info), viewportRect, path);
+            return;
+        }
+        if (info.roleUS == "text")
+        {
+            Match care = CareIdPattern.Match(info.name ?? "");
+            if (care.Success)
+            {
+                if (result.DetailNoRawat.Length > 0 && result.DetailNoRawat != care.Value)
+                    result.DetailIdentityAmbiguous = true;
+                else
+                    result.DetailNoRawat = care.Value;
+            }
+        }
+        if (info.children < 0 || info.children > 2000) { result.ReadError = true; return; }
+        for (int index = 0; index < info.children; index++)
+        {
+            long child = getAccessibleChildFromContext(vm, context, index);
+            if (child == 0) continue;
+            try { Walk(result, seenTables, vm, child, depth + 1, timer, ref nodes,
+                window, clip, viewport, viewportRect, path); }
+            finally { Release(vm, child); }
+        }
+    }
+
+    private static void ReadTable(Candidate result, HashSet<string> seenTables, int vm, long context,
+        IntPtr window, int[] clip, bool viewport, int[] tableRect, int[] viewportRect,
+        List<OverlayProbeNode> path)
+    {
+        TableInfo table;
+        if (!getAccessibleTableInfo(vm, context, out table)) { result.ReadError = true; return; }
+        try
+        {
+            string tableKey = vm.ToString() + ":" + table.table.ToString();
+            if (!seenTables.Add(tableKey) || table.rows < 0 || table.rows > 1000 || table.columns < 0 || table.columns > 80) return;
+            List<string> headers = Headers(vm, context);
+            int noResep = HeaderIndex(headers, "no.resep", "no. resep", "no resep");
+            int noRawat = HeaderIndex(headers, "no.rawat", "no. rawat", "no rawat");
+            if (noResep >= 0 && noRawat >= 0)
+            {
+                ObserveProbeWindow(result, window, path);
+                result.KhanzaDetected = true;
+                int selected = -1, count = 0;
+                for (int row = 0; row < table.rows; row++) if (isAccessibleTableRowSelected(vm, table.table, row)) { selected = row; count++; }
+                if (getAccessibleTableRowSelectionCount(vm, table.table) != count) { result.ReadError = true; return; }
+                if (count == 1)
+                {
+                    // Some Khanza renderers expose a decorated accessibility
+                    // value (for example HTML used for the red queue row) rather
+                    // than only the visible cell text. Canonicalize the two
+                    // identifiers by their strict Khanza formats. Ambiguous or
+                    // missing values remain empty and therefore fail closed.
+                    string prescription = ExtractSinglePrescriptionId(
+                        Cell(vm, table.table, selected, noResep));
+                    string care = ExtractSingleCareId(
+                        Cell(vm, table.table, selected, noRawat));
+                    int patientIdColumn = HeaderIndex(headers, "no.rm", "no. rm", "no rm");
+                    int patientNameColumn = HeaderIndex(headers, "pasien", "nama pasien");
+                    int prescriberColumn = HeaderIndex(headers, "dokter peresep", "dokter");
+                    string patientId = DisplayCell(vm, table.table, selected, patientIdColumn, 40);
+                    string patientName = DisplayCell(vm, table.table, selected, patientNameColumn, 160);
+                    string prescriber = DisplayCell(vm, table.table, selected, prescriberColumn, 160);
+                    if (result.NoResep.Length > 0 && (result.NoResep != prescription || result.NoRawat != care)) result.AmbiguousIdentity = true;
+                    else {
+                        result.NoResep = prescription;
+                        result.NoRawat = care;
+                        result.PatientId = patientId;
+                        result.PatientName = patientName;
+                        result.PrescriberName = prescriber;
+                    }
+                }
+                return;
+            }
+
+            if (HeaderIndex(headers, "nama racikan") >= 0)
+            {
+                ObserveProbeWindow(result, window, path);
+                result.KhanzaDetected = true;
+                result.DetailFound = true;
+                result.CompoundGroups += table.rows;
+                return;
+            }
+            int code = HeaderIndex(headers, "kode barang", "kode obat", "kd barang");
+            int name = HeaderIndex(headers, "nama barang", "nama obat", "obat");
+            int quantity = HeaderIndex(headers, "jumlah", "jml");
+            if (code < 0 || name < 0 || quantity < 0) return;
+            ObserveProbeWindow(result, window, path);
+            result.KhanzaDetected = true;
+            result.DetailFound = true;
+            bool compounded = HeaderIndex(headers, "jml") >= 0 && HeaderIndex(headers, "jumlah") < 0;
+            OverlayProbeTable probe = null;
+            if (_overlayProbe && result.OverlayProbeTables.Count < 8) {
+                probe = new OverlayProbeTable { hwnd = window.ToInt64(), model_rows = table.rows,
+                    columns = table.columns, name_column = name, hierarchy = path,
+                    clip = Clip(viewportRect, tableRect) };
+                result.OverlayProbeTables.Add(probe);
+            }
+            List<Item> rows = ReadItems(vm, table, headers, code, name, quantity, compounded,
+                result, window, tableRect, viewportRect, probe);
+            // Khanza keeps an empty compound-component JTable in the tree even
+            // for a regular prescription. It is UI scaffolding, not a clinical
+            // compound table. A declared compound group with no active component
+            // still fails closed because CompoundGroups will exceed this count.
+            AddItemRows(result, rows, compounded);
+        }
+        finally { ReleaseTable(vm, table); }
+    }
+
+    private static List<string> Headers(int vm, long context)
+    {
+        List<string> values = new List<string>();
+        TableInfo headers;
+        if (!getAccessibleTableColumnHeader(vm, context, out headers)) return values;
+        try
+        {
+            if (headers.rows < 1 || headers.columns < 0 || headers.columns > 80) return values;
+            for (int column = 0; column < headers.columns; column++)
+                values.Add(Normalize(Cell(vm, headers.table, 0, column)));
+        }
+        finally { ReleaseTable(vm, headers); }
+        return values;
+    }
+
+    private static List<Item> ReadItems(int vm, TableInfo table, List<string> headers,
+        int code, int name, int quantity, bool compounded, Candidate candidate,
+        IntPtr window, int[] tableRect, int[] viewportRect, OverlayProbeTable probe)
+    {
+        List<Item> values = new List<Item>();
+        int signa = HeaderIndex(headers, "aturan pakai", "signa");
+        for (int row = 0; row < table.rows; row++)
+        {
+            string drugCode = Cell(vm, table.table, row, code).Trim();
+            ContextInfo nameInfo;
+            string drugName = Cell(vm, table.table, row, name, out nameInfo).Trim();
+            string rawQuantity = Cell(vm, table.table, row, quantity).Trim();
+            if (drugCode.Length == 0 && drugName.Length == 0) continue;
+            if (!PositiveQuantity(rawQuantity)) continue;
+            if (drugCode.Length == 0 || drugName.Length == 0) throw new InvalidDataException("ITEM_IDENTITY_INCOMPLETE");
+            Item item = new Item();
+            item.source_item_key = (compounded ? "compound:" : "regular:") + (row + 1).ToString();
+            item.drug_code = drugCode;
+            item.drug_name = drugName;
+            item.raw_quantity = rawQuantity;
+            item.raw_signa = signa < 0 ? "" : Cell(vm, table.table, row, signa).Trim();
+            values.Add(item);
+            if (_overlayEnabled) {
+                string group = compounded ? "racikan:" + (candidate.CompoundTables.Count + 1) : "";
+                int[] rawRect = Bounds(nameInfo);
+                int[] tableViewport = Clip(viewportRect, tableRect);
+                int[] clippedRect = tableViewport == null ? null : Clip(tableViewport, rawRect);
+                string geometrySource = "cell";
+                if (!PositiveRect(clippedRect)) {
+                    clippedRect = DeriveVisibleTableRow(tableRect, viewportRect, table.rows, row);
+                    geometrySource = "uniform_table_row";
+                    if (PositiveRect(clippedRect)) candidate.OverlayDerivedRows++;
+                }
+                if (rawRect[2] > 0 && rawRect[3] > 0) candidate.OverlayRawPositiveRows++;
+                if (PositiveRect(clippedRect)) candidate.OverlayClippedPositiveRows++;
+                if (probe != null) {
+                    probe.captured++;
+                    if (rawRect[2] > 0 && rawRect[3] > 0) probe.raw_positive++;
+                    if (PositiveRect(clippedRect)) probe.clipped_positive++;
+                    if (geometrySource == "uniform_table_row" && PositiveRect(clippedRect))
+                        probe.derived_positive++;
+                    if (probe.cells.Count < 3) {
+                        OverlayProbeCell sample = new OverlayProbeCell {
+                            row = row, raw = RawBounds(nameInfo), clipped = clippedRect,
+                            component = nameInfo.component, role = ProbeRole(nameInfo.roleUS),
+                            geometry_source = geometrySource };
+                        probe.cells.Add(sample);
+                    }
+                }
+                candidate.OverlayRows[item] = new OverlayRow {
+                    source_item_key = (compounded ? group + ":" : "") + item.source_item_key,
+                    drug_code = item.drug_code, compound_group = group,
+                    hwnd = window.ToInt64(), rect = clippedRect, geometry_source = geometrySource
+                };
+            }
+        }
+        return values;
+    }
+
+    private static void AddItemRows(Candidate candidate, List<Item> rows, bool compounded)
+    {
+        if (compounded)
+        {
+            if (rows.Count > 0) candidate.CompoundTables.Add(rows);
+        }
+        else candidate.Regular.AddRange(rows);
+    }
+
+    private static bool HasCompleteDetailPayload(Candidate candidate)
+    {
+        return !candidate.ReadError && !candidate.DetailIdentityAmbiguous &&
+            !candidate.CareSettingAmbiguous && candidate.DetailFound &&
+            candidate.DetailNoRawat.Length > 0 && candidate.CareSetting.Length > 0 &&
+            candidate.Regular.Count + candidate.CompoundItemCount > 0 &&
+            (candidate.CompoundGroups == 0
+                ? candidate.CompoundTables.Count == 0
+                : candidate.CompoundTables.Count == candidate.CompoundGroups);
+    }
+
+    private static string Cell(int vm, long table, int row, int column)
+    {
+        ContextInfo ignored;
+        return Cell(vm, table, row, column, out ignored);
+    }
+
+    private static string Cell(int vm, long table, int row, int column, out ContextInfo info)
+    {
+        info = new ContextInfo();
+        if (column < 0) return "";
+        CellInfo cell;
+        if (!getAccessibleTableCellInfo(vm, table, row, column, out cell)) throw new InvalidDataException("CELL_READ_FAILED");
+        try
+        {
+            if (!getAccessibleContextInfo(vm, cell.context, out info)) throw new InvalidDataException("CELL_CONTEXT_FAILED");
+            return String.IsNullOrWhiteSpace(info.name) ? (info.description ?? "") : info.name;
+        }
+        finally { Release(vm, cell.context); }
+    }
+
+    private static string DisplayCell(int vm, long table, int row, int column, int maximum)
+    {
+        if (column < 0) return "";
+        string raw = Cell(vm, table, row, column);
+        string withoutMarkup = Regex.Replace(raw ?? "", "<[^>]*>", " ");
+        string normalized = Regex.Replace(
+            HttpUtility.HtmlDecode(withoutMarkup) ?? "", @"\s+", " ").Trim();
+        return normalized.Length <= maximum ? normalized : "";
+    }
+
+    private static void Publish(Candidate first, Candidate second)
+    {
+        string connectionState = second.KhanzaDetected ? "CONNECTED" : "DISCONNECTED";
+        if (connectionState != _lastConnectionState)
+        {
+            EmitStatus(connectionState, second.KhanzaDetected ? "KHANZA_UI_DETECTED" :
+                (second.Accessible ? "KHANZA_UI_NOT_DETECTED" : "KHANZA_NOT_FOUND"));
+            _lastConnectionState = connectionState;
+        }
+        if (!second.KhanzaDetected)
+        {
+            _lastFingerprint = "";
+            _lastPrescription = "";
+            _lastInvalid = "";
+            ClearPendingIdentity();
+            return;
+        }
+        if (!first.Complete || !second.Complete)
+        {
+            string key = second.NoResep;
+            string reason = DiagnosticReason(second);
+            string invalid = key + "|" + reason;
+            if (key.Length > 0 && invalid != _lastInvalid)
+            {
+                Emit(new Dictionary<string, object> { { "type", "invalidated" }, { "no_resep", key }, { "reason", reason } });
+                _lastInvalid = invalid;
+            }
+            EmitDiagnostic(second, reason);
+            return;
+        }
+        string firstFingerprint = Fingerprint(first);
+        string secondFingerprint = Fingerprint(second);
+        if (firstFingerprint != secondFingerprint) return;
+        _overlayRevision = secondFingerprint;
+        _lastInvalid = "";
+        _lastDiagnostic = "";
+        if (secondFingerprint == _lastFingerprint) return;
+        _lastFingerprint = secondFingerprint;
+        _lastPrescription = second.NoResep;
+        List<Item> compounded = new List<Item>();
+        for (int group = 0; group < second.CompoundTables.Count; group++)
+        {
+            foreach (Item item in second.CompoundTables[group])
+            {
+                item.compound_group = "racikan:" + (group + 1).ToString();
+                item.source_item_key = item.compound_group + ":" + item.source_item_key;
+                compounded.Add(item);
+            }
+        }
+        Dictionary<string, object> header = new Dictionary<string, object>();
+        header["no_resep"] = second.NoResep;
+        header["no_rawat"] = second.NoRawat;
+        header["patient_id"] = second.PatientId;
+        header["patient_name"] = second.PatientName;
+        header["prescriber_name"] = second.PrescriberName;
+        header["status"] = "DRAFT";
+        header["care_setting"] = second.CareSetting;
+        Dictionary<string, object> message = new Dictionary<string, object>();
+        message["type"] = "snapshot";
+        message["schema"] = 1;
+        message["stable"] = true;
+        message["composition_complete"] = true;
+        message["captured_at"] = DateTime.UtcNow.ToString("o");
+        message["header"] = header;
+        message["regular_items"] = second.Regular;
+        message["compounded_items"] = compounded;
+        message["revision"] = secondFingerprint;
+        message["stability_pair_ms"] = first.ScanMilliseconds + second.ScanMilliseconds + 75;
+        message["nodes_read"] = first.NodesRead + second.NodesRead;
+        message["visible_java_windows"] = Math.Max(first.VisibleJavaWindows, second.VisibleJavaWindows);
+        Emit(message);
+    }
+
+    private static void BindStableQueueIdentity(Candidate first, Candidate second)
+    {
+        bool firstHas = first.NoResep.Length > 0 && first.NoRawat.Length > 0;
+        bool secondHas = second.NoResep.Length > 0 && second.NoRawat.Length > 0;
+        if (firstHas && secondHas)
+        {
+            if (first.NoResep == second.NoResep && first.NoRawat == second.NoRawat &&
+                first.PatientId == second.PatientId &&
+                first.PatientName == second.PatientName &&
+                first.PrescriberName == second.PrescriberName &&
+                !first.AmbiguousIdentity && !second.AmbiguousIdentity)
+            {
+                _pendingNoResep = second.NoResep;
+                _pendingNoRawat = second.NoRawat;
+                _pendingPatientId = second.PatientId;
+                _pendingPatientName = second.PatientName;
+                _pendingPrescriberName = second.PrescriberName;
+                _pendingCareSetting = second.CareSetting;
+                _pendingIdentityAt = DateTime.UtcNow;
+                if (first.CareSettingAmbiguous || second.CareSettingAmbiguous ||
+                    first.CareSetting != second.CareSetting)
+                    ClearPendingIdentity();
+            }
+            else
+            {
+                ClearPendingIdentity();
+                first.AmbiguousIdentity = true;
+                second.AmbiguousIdentity = true;
+            }
+            return;
+        }
+        if (firstHas != secondHas)
+        {
+            ClearPendingIdentity();
+            first.AmbiguousIdentity = true;
+            second.AmbiguousIdentity = true;
+            return;
+        }
+        BindPendingIdentity(first);
+        BindPendingIdentity(second);
+    }
+
+    private static void BindPendingIdentity(Candidate candidate)
+    {
+        if (!candidate.DetailFound || _pendingNoResep.Length == 0 ||
+            DateTime.UtcNow - _pendingIdentityAt > TimeSpan.FromMinutes(5)) return;
+        if (candidate.DetailNoRawat.Length == 0 || candidate.DetailIdentityAmbiguous ||
+            candidate.DetailNoRawat != _pendingNoRawat)
+        {
+            candidate.AmbiguousIdentity = true;
+            ClearPendingIdentity();
+            return;
+        }
+        candidate.NoResep = _pendingNoResep;
+        candidate.NoRawat = _pendingNoRawat;
+        candidate.PatientId = _pendingPatientId;
+        candidate.PatientName = _pendingPatientName;
+        candidate.PrescriberName = _pendingPrescriberName;
+        if (candidate.CareSetting.Length == 0)
+            candidate.CareSetting = _pendingCareSetting;
+        else if (_pendingCareSetting.Length > 0 && candidate.CareSetting != _pendingCareSetting)
+            candidate.CareSettingAmbiguous = true;
+    }
+
+    private static void ClearPendingIdentity()
+    {
+        _pendingNoResep = "";
+        _pendingNoRawat = "";
+        _pendingPatientId = "";
+        _pendingPatientName = "";
+        _pendingPrescriberName = "";
+        _pendingCareSetting = "";
+        _pendingIdentityAt = DateTime.MinValue;
+    }
+
+    private static void ObserveCareSetting(Candidate candidate, ContextInfo info)
+    {
+        string name = Normalize(info.name);
+        if (name != "rawat jalan" && name != "rawat inap") return;
+        string states = (info.statesUS ?? "").ToLowerInvariant();
+        bool selectedTab = Normalize(info.roleUS) == "page tab" &&
+            Regex.IsMatch(states, @"(^|,\s*)selected(\s*,|$)", RegexOptions.CultureInvariant);
+        // The prescription detail exposes the Tarif value as an accessible text
+        // component.  Accept that exact value as a second independent source,
+        // while deliberately excluding the Rawat Jalan/Rawat Inap menu buttons.
+        bool detailText = Normalize(info.roleUS) == "text";
+        if (!selectedTab && !detailText)
+            return;
+        string detected = name == "rawat jalan" ? "RALAN" : "RANAP";
+        if (candidate.CareSetting.Length > 0 && candidate.CareSetting != detected)
+            candidate.CareSettingAmbiguous = true;
+        else
+            candidate.CareSetting = detected;
+    }
+
+    private static bool RunSelfTest()
+    {
+        bool quantity = PositiveQuantity("1") && PositiveQuantity("0.5") &&
+            !PositiveQuantity("") && !PositiveQuantity("0") && !PositiveQuantity("0,0");
+        ClearPendingIdentity();
+        ContextInfo selectedRalan = new ContextInfo {
+            name = "Rawat Jalan", roleUS = "page tab", statesUS = "enabled,selected,visible"
+        };
+        Candidate careCandidate = new Candidate();
+        ObserveCareSetting(careCandidate, selectedRalan);
+        ContextInfo detailRalan = new ContextInfo {
+            name = "Rawat Jalan", roleUS = "text", statesUS = "enabled,visible"
+        };
+        Candidate detailCareCandidate = new Candidate();
+        ObserveCareSetting(detailCareCandidate, detailRalan);
+        ContextInfo menuRanap = new ContextInfo {
+            name = "Rawat Inap", roleUS = "push button", statesUS = "enabled,visible"
+        };
+        ObserveCareSetting(detailCareCandidate, menuRanap);
+        Candidate ambiguousCareCandidate = new Candidate();
+        ObserveCareSetting(ambiguousCareCandidate, detailRalan);
+        ContextInfo detailRanap = new ContextInfo {
+            name = "Rawat Inap", roleUS = "text", statesUS = "enabled,visible"
+        };
+        ObserveCareSetting(ambiguousCareCandidate, detailRanap);
+        Candidate queueA = new Candidate { NoResep = "RX-SELF", NoRawat = "2026/09/05/000001",
+            PatientId = "RM-SELF", PatientName = "Pasien Self Test",
+            PrescriberName = "Dokter A", CareSetting = careCandidate.CareSetting };
+        Candidate queueB = new Candidate { NoResep = "RX-SELF", NoRawat = "2026/09/05/000001",
+            PatientId = "RM-SELF", PatientName = "Pasien Self Test",
+            PrescriberName = "Dokter A", CareSetting = careCandidate.CareSetting };
+        BindStableQueueIdentity(queueA, queueB);
+        Candidate detailA = new Candidate { DetailFound = true, DetailNoRawat = "2026/09/05/000001" };
+        Candidate detailB = new Candidate { DetailFound = true, DetailNoRawat = "2026/09/05/000001" };
+        BindStableQueueIdentity(detailA, detailB);
+        bool bound = detailA.NoResep == "RX-SELF" && detailB.NoResep == "RX-SELF" &&
+            detailA.NoRawat == "2026/09/05/000001" && detailB.NoRawat == "2026/09/05/000001" &&
+            detailA.PatientId == "RM-SELF" && detailB.PatientName == "Pasien Self Test" &&
+            detailA.PrescriberName == "Dokter A" &&
+            detailA.CareSetting == "RALAN" && detailB.CareSetting == "RALAN";
+        Candidate wrong = new Candidate { DetailFound = true, DetailNoRawat = "2026/09/05/000002" };
+        BindPendingIdentity(wrong);
+        bool mismatchRejected = wrong.AmbiguousIdentity && _pendingNoResep.Length == 0;
+        Candidate hiddenCompound = new Candidate();
+        AddItemRows(hiddenCompound, new List<Item>(), true);
+        Candidate activeCompound = new Candidate();
+        AddItemRows(activeCompound, new List<Item> { new Item() }, true);
+        bool hiddenCompoundIgnored = hiddenCompound.CompoundTables.Count == 0 &&
+            activeCompound.CompoundTables.Count == 1;
+        bool decoratedIdentity =
+            ExtractSinglePrescriptionId("<html><font color='red'>202609050012</font></html>") == "202609050012" &&
+            ExtractSingleCareId("row: 2026/09/05/000002") == "2026/09/05/000002" &&
+            ExtractSinglePrescriptionId("202609050012 202609050013") == "";
+        Candidate completePayload = new Candidate {
+            DetailFound = true, DetailNoRawat = "2026/09/05/000001", CareSetting = "RALAN"
+        };
+        completePayload.Regular.Add(new Item {
+            drug_code = "OBAT-1", drug_name = "Obat Uji", raw_quantity = "1"
+        });
+        bool earlyStopSafe = HasCompleteDetailPayload(completePayload);
+        completePayload.CareSettingAmbiguous = true;
+        bool ambiguousNotStopped = !HasCompleteDetailPayload(completePayload);
+        Candidate orderA = new Candidate { NoResep = "RX-ORDER", NoRawat = "2026/09/05/000003", PatientId = "RM-ORDER" };
+        orderA.Regular.Add(new Item { source_item_key = "row:1", drug_code = "OBAT-A", raw_quantity = "1" });
+        orderA.Regular.Add(new Item { source_item_key = "row:2", drug_code = "OBAT-B", raw_quantity = "2" });
+        Candidate orderB = new Candidate { NoResep = "RX-ORDER", NoRawat = "2026/09/05/000003", PatientId = "RM-ORDER" };
+        orderB.Regular.Add(new Item { source_item_key = "row:2", drug_code = "OBAT-B", raw_quantity = "2" });
+        orderB.Regular.Add(new Item { source_item_key = "row:1", drug_code = "OBAT-A", raw_quantity = "1" });
+        Candidate changedOrder = new Candidate { NoResep = "RX-ORDER", NoRawat = "2026/09/05/000003", PatientId = "RM-ORDER" };
+        changedOrder.Regular.Add(new Item { source_item_key = "row:1", drug_code = "OBAT-A", raw_quantity = "1" });
+        changedOrder.Regular.Add(new Item { source_item_key = "row:2", drug_code = "OBAT-B", raw_quantity = "3" });
+        bool rowOrderStable = Fingerprint(orderA) == Fingerprint(orderB) &&
+            Fingerprint(orderA) != Fingerprint(changedOrder);
+        ClearPendingIdentity();
+        return quantity && careCandidate.CareSetting == "RALAN" &&
+            detailCareCandidate.CareSetting == "RALAN" && bound && mismatchRejected &&
+            ambiguousCareCandidate.CareSettingAmbiguous && hiddenCompoundIgnored &&
+            decoratedIdentity && earlyStopSafe && ambiguousNotStopped && rowOrderStable && OverlaySelfTest();
+    }
+
+    private static string ExtractSinglePrescriptionId(string value)
+    {
+        MatchCollection matches = PrescriptionIdPattern.Matches(value ?? "");
+        return matches.Count == 1 ? matches[0].Value : "";
+    }
+
+    private static string ExtractSingleCareId(string value)
+    {
+        MatchCollection matches = CareIdPattern.Matches(value ?? "");
+        return matches.Count == 1 ? matches[0].Value : "";
+    }
+
+    private static string DiagnosticReason(Candidate candidate)
+    {
+        if (candidate.ReadError) return "UI_READ_ERROR";
+        if (candidate.AmbiguousIdentity || candidate.DetailIdentityAmbiguous)
+            return "PATIENT_IDENTITY_AMBIGUOUS";
+        if (candidate.CareSettingAmbiguous) return "CARE_SETTING_AMBIGUOUS";
+        if (!candidate.DetailFound) return "DETAIL_NOT_DETECTED";
+        if (candidate.NoResep.Length == 0 || candidate.NoRawat.Length == 0)
+            return candidate.DetailNoRawat.Length == 0 ?
+                "DETAIL_CARE_ID_NOT_READABLE" : "QUEUE_IDENTITY_NOT_BOUND";
+        if (candidate.CareSetting.Length == 0) return "CARE_SETTING_NOT_DETECTED";
+        if (candidate.Regular.Count + candidate.CompoundItemCount == 0)
+            return "NO_COMMITTED_ITEMS";
+        if (candidate.CompoundGroups != candidate.CompoundTables.Count)
+            return "COMPOUND_INCOMPLETE";
+        return "DATA_INCOMPLETE";
+    }
+
+    private static void EmitDiagnostic(Candidate candidate, string reason)
+    {
+        string signature = reason + "|" + candidate.DetailFound.ToString() + "|" +
+            candidate.Regular.Count.ToString() + "|" + candidate.CompoundItemCount.ToString() + "|" +
+            candidate.CompoundGroups.ToString() + "|" + candidate.CompoundTables.Count.ToString() + "|" +
+            candidate.CareSetting;
+        if (signature == _lastDiagnostic) return;
+        _lastDiagnostic = signature;
+        Emit(new Dictionary<string, object> {
+            { "type", "diagnostic" }, { "reason", reason },
+            { "detail_detected", candidate.DetailFound },
+            { "identity_bound", candidate.NoResep.Length > 0 && candidate.NoRawat.Length > 0 },
+            { "regular_count", candidate.Regular.Count },
+            { "compound_count", candidate.CompoundItemCount },
+            { "compound_group_count", candidate.CompoundGroups },
+            { "compound_table_count", candidate.CompoundTables.Count },
+            { "care_setting", candidate.CareSetting },
+            { "scan_ms", candidate.ScanMilliseconds },
+            { "nodes_read", candidate.NodesRead },
+            { "visible_java_windows", candidate.VisibleJavaWindows }
+        });
+    }
+
+    private static void InvalidateIfChanged(Candidate first)
+    {
+        if (_lastFingerprint.Length == 0 || _lastPrescription.Length == 0) return;
+        string current = first.Complete ? Fingerprint(first) : "";
+        if (current == _lastFingerprint) return;
+        Emit(new Dictionary<string, object> {
+            { "type", "invalidated" },
+            { "no_resep", _lastPrescription },
+            { "reason", "UI_NOT_STABLE" }
+        });
+        _lastFingerprint = "";
+        _lastPrescription = "";
+    }
+
+    private static string Fingerprint(Candidate candidate)
+    {
+        StringBuilder text = new StringBuilder();
+        text.Append(candidate.NoResep).Append('\u001f').Append(candidate.NoRawat);
+        text.Append('\u001f').Append(candidate.PatientId);
+        // JAB may enumerate the same visible rows in a different order between
+        // the two stability reads.  The prescription identity is a set of row
+        // values, so canonicalize that set before comparing scans.  Keep each
+        // compound group in its own namespace because group membership remains
+        // clinically meaningful.
+        List<string> rows = new List<string>();
+        foreach (Item item in candidate.Regular)
+            rows.Add("regular\u001f" + item.source_item_key + "\u001f" + item.drug_code + "\u001f" + item.raw_quantity);
+        for (int group = 0; group < candidate.CompoundTables.Count; group++)
+            foreach (Item item in candidate.CompoundTables[group])
+                rows.Add("racikan:" + (group + 1).ToString() + "\u001f" + item.drug_code + "\u001f" + item.raw_quantity);
+        rows.Sort(StringComparer.Ordinal);
+        foreach (string row in rows)
+            text.Append('\u001e').Append(row);
+        using (SHA256 sha = SHA256.Create())
+            return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text.ToString()))).Replace("-", "").ToLowerInvariant();
+    }
+
+    private static bool PositiveQuantity(string value)
+    {
+        bool digit = false, nonzero = false;
+        foreach (char character in value)
+            if (Char.IsDigit(character)) { digit = true; if (character != '0') nonzero = true; }
+        return digit && nonzero;
+    }
+
+    private static int HeaderIndex(List<string> headers, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            int index = headers.IndexOf(name);
+            if (index >= 0) return index;
+        }
+        return -1;
+    }
+
+    private static string Normalize(string value)
+    {
+        return (value ?? "").Trim().ToLowerInvariant();
+    }
+
+    private static void Release(int vm, long value)
+    {
+        if (value != 0) releaseJavaObject(vm, value);
+    }
+
+    private static void ReleaseTable(int vm, TableInfo table)
+    {
+        Release(vm, table.caption); Release(vm, table.summary);
+        Release(vm, table.context); Release(vm, table.table);
+    }
+
+    private static string FindBridgeDll()
+    {
+        List<string> candidates = new List<string>();
+        string configured = Environment.GetEnvironmentVariable("EMSS_KHANZA_JAB_DLL") ?? "";
+        if (configured.Length > 0) candidates.Add(configured);
+        string javaHome = Environment.GetEnvironmentVariable("JAVA_HOME") ?? "";
+        if (javaHome.Length > 0) candidates.Add(Path.Combine(javaHome, "bin", "windowsaccessbridge-32.dll"));
+        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        string bell = Path.Combine(programFilesX86, "BellSoft");
+        if (Directory.Exists(bell))
+        {
+            try
+            {
+                foreach (string directory in Directory.GetDirectories(bell, "*32*"))
+                    candidates.Add(Path.Combine(directory, "bin", "windowsaccessbridge-32.dll"));
+            }
+            catch (UnauthorizedAccessException) { }
+        }
+        foreach (string candidate in candidates) if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+        return "";
+    }
+
+    private static void EmitStatus(string state, string reason)
+    {
+        Emit(new Dictionary<string, object> { { "type", "status" }, { "state", state }, { "reason", reason } });
+    }
+
+    private static void Emit(object value)
+    {
+        lock (OutputLock)
+        {
+            Console.Out.WriteLine(Json.Serialize(value));
+            Console.Out.Flush();
+        }
+    }
+}
