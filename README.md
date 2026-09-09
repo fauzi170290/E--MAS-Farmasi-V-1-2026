@@ -1,44 +1,103 @@
 # E-MAS Farmasi
 
-**Electronic Medication Alert System** untuk membantu apoteker melakukan
-skrining *drug–drug interaction* (DDI) dari resep yang sedang dibuka di SIMRS
-Khanza.
+**Electronic Medication Alert System** adalah aplikasi desktop Windows untuk
+membantu apoteker meninjau potensi *drug–drug interaction* (DDI) pada resep
+SIMRS Khanza. Khanza tetap menjadi sistem informasi utama. E-MAS memberi hasil
+skrining, informasi klinis, serta dukungan tindak lanjut farmasi tanpa mengubah
+resep atau data pelayanan Khanza.
 
-Khanza tetap menjadi sistem utama. E-MAS tidak mengubah resep, obat, pasien,
-atau transaksi Khanza. Pembacaan resep melalui Desktop/Java Access Bridge (JAB)
-bersifat read-only. MySQL Khanza tetap tersedia sebagai fallback read-only dan
-tidak boleh aktif bersamaan dengan Desktop/JAB.
+## E-MAS Farmasi v1.0.11
 
-## Rilis 1.0.6
+Release kandidat untuk pilot deployment E-MAS Farmasi dengan integrasi SIMRS
+Khanza melalui Desktop/JAB. Khanza tetap menjadi sistem informasi utama;
+E-MAS menyediakan skrining DDI dan dukungan kerja apoteker tanpa mengubah
+resep maupun data pelayanan Khanza.
 
-Rilis ini menyertakan `KhanzaBridge.exe` dan modul overlay Khanza secara
-langsung pada installer Windows. Overlay tetap opt-in: instalasi baru memulai
-dengan overlay nonaktif, sedangkan workstation yang telah lulus UAT dan sudah
-memiliki `khanza_desktop_overlay_poc = true` mempertahankan konfigurasi tersebut
-saat upgrade.
+### Perbaikan utama
 
-Fitur utama yang tersedia:
+- First-run onboarding diperbarui.
+- Pemilihan Farmasi Rawat Jalan / Rawat Inap saat commissioning.
+- Desktop/JAB menjadi metode pembacaan resep default pada fresh install.
+- JAB adapter aktif otomatis setelah commissioning.
+- Auto-connect ketika SIMRS Khanza sudah berjalan.
+- Status **Menunggu SIMRS Khanza dibuka** ketika Khanza belum dibuka.
+- Penyederhanaan UI Mode Farmasi dan Antrean Resep.
+- Backup dan Restore berbasis file untuk pemindahan data antar-PC.
 
-- pembacaan resep Khanza melalui Desktop/JAB;
-- skrining DDI menggunakan Knowledge Base yang Published;
-- popup ringkas, audio, dan penandaan baris obat sebagai UX tambahan;
-- registry obat belum dipetakan dan workflow mapping;
-- pengelolaan Knowledge Base, versi, provenance, publish, dan rollback;
-- backup/restore lokal, paket update KB, status workstation, dashboard kualitas,
-  serta status operasional;
-- profil commissioning Rawat Jalan (RALAN) atau Rawat Inap (RANAP).
+### Integrasi
 
-## Instalasi Windows
+- Desktop/JAB: primary.
+- MySQL/4 View: fallback.
+- Satu prescription source aktif pada satu waktu.
 
-1. Jalankan installer resmi sebagai administrator.
-2. Pada instalasi baru, selesaikan commissioning dan pilih profil **RALAN** atau
-   **RANAP** yang sesuai dengan workstation.
-3. Buka **Persiapan Instalasi** lalu jalankan Compatibility/Deployment Wizard.
-4. Buka **Status Operasional & Pemulihan** untuk memastikan Database Lokal,
-   Knowledge Base DDI, Prescription Source, Khanza/JAB, dan KhanzaBridge siap.
-5. Jalankan UAT resep sebelum dipakai untuk pelayanan.
+### Catatan
 
-Lokasi data persisten:
+Release ini sedang digunakan untuk pilot deployment pada workstation pelayanan
+farmasi.
+
+### Keamanan
+
+E-MAS membaca SIMRS Khanza secara read-only dan tidak mengubah data Khanza.
+
+## Bukti tampilan pilot
+
+Gambar berikut telah disamarkan: nama pasien, nomor rekam medis, nomor resep,
+nama pengguna, dan alamat jaringan tidak ditampilkan.
+
+![Popup DDI agregat di Khanza dengan overlay warna pada baris obat yang terlibat](docs/images/pilot/khanza-ddi-popup-overlay.png)
+
+*Popup menampilkan jumlah interaksi, pasangan obat, tingkat keparahan, dan
+tindakan klinis ringkas. Overlay warna adalah penanda tambahan pada baris obat
+di Khanza setelah verifikasi workstation.*
+
+![Antrean Resep E-MAS dengan detail skrining dan informasi obat belum dipetakan](docs/images/pilot/emas-antrean-resep-detail.png)
+
+*Antrean Resep menempatkan hasil skrining, pasangan DDI lintas resep, dan item
+belum dipetakan dalam satu area kerja apoteker.*
+
+![Tampilan Antrean Resep yang ringkas dengan area detail yang lebih besar](docs/images/pilot/emas-antrean-resep-kompak.png)
+
+*Tampilan Mode Farmasi yang dikompakkan memberi ruang lebih besar untuk tabel
+antrean dan rincian interaksi pada layar pelayanan.*
+
+![Dashboard Kajian pDDI E-MAS](docs/images/pilot/emas-dashboard-pddi.png)
+
+*Dashboard Kajian pDDI menyajikan ringkasan agregat, spektrum tingkat risiko,
+dan indikator kualitas mapping serta Knowledge Base DDI untuk pengguna
+berwenang.*
+
+## Fitur utama
+
+- Pembacaan resep SIMRS Khanza melalui Desktop/Java Access Bridge (JAB) pada
+  workstation yang sama.
+- Skrining DDI berdasarkan Knowledge Base DDI Published/Active dengan
+  provenance sumber tetap terpisah.
+- Popup DDI agregat, audio peringatan, dan overlay penanda obat yang terpisah
+  dari jalur evaluasi klinis.
+- Antrean resep, detail hasil skrining, registry obat belum dipetakan, dan
+  dokumentasi intervensi apoteker.
+- Pengelolaan mapping obat, Knowledge Base DDI, backup/restore, pembaruan KB,
+  dashboard kualitas, serta pemantauan operasional untuk peran berwenang.
+## Prinsip penggunaan
+
+- E-MAS **read-only** terhadap Khanza. Aplikasi tidak mengubah, menyimpan, atau
+  menghapus resep, obat, pasien, maupun transaksi Khanza.
+- Desktop/JAB membaca konteks resep yang sedang terbuka pada layar Khanza.
+- DDI engine hanya memakai Knowledge Base DDI yang berstatus Published/Active.
+  Draft tidak dipakai untuk skrining pelayanan.
+- Obat yang belum mapped atau data yang belum lengkap tidak boleh dianggap aman.
+- Popup dan audio tidak menunggu overlay, analitik, backup, atau proses
+  administratif lain.
+- E-MAS membantu proses farmasi; keputusan klinis tetap berada pada apoteker,
+  KFT, dan kebijakan rumah sakit.
+
+## Instalasi
+
+Jalankan installer resmi Windows sebagai Administrator. Installer menempatkan
+aplikasi dan runtime pada Program Files, sedangkan data operasional dipisahkan
+agar tetap aman saat upgrade atau uninstall.
+
+Data persisten berada di:
 
 ```text
 C:\ProgramData\eMSSFarmasi\
@@ -49,14 +108,39 @@ C:\ProgramData\eMSSFarmasi\
 └── config.toml
 ```
 
-Upgrade aplikasi menjaga database lokal, mapping, registry unmapped,
-Knowledge Base, audit, konfigurasi, dan profil commissioning. Uninstall tidak
-menghapus data persisten tanpa konfirmasi eksplisit.
+Saat instalasi baru:
 
-## Koneksi Khanza: Desktop/JAB (utama)
+1. Jalankan E-MAS.
+2. Buat **Admin Utama**.
+3. E-MAS otomatis membuka **Persiapan Awal E-MAS**.
+4. Pilih **Farmasi Rawat Jalan** atau **Farmasi Rawat Inap**.
+5. Gunakan **Desktop / JAB** yang sudah dipilih secara default, kecuali rumah
+   sakit secara eksplisit menggunakan MySQL / 4 View.
+6. Selesaikan pemeriksaan sistem dan masuk ke E-MAS.
+7. Jalankan **Persiapan Instalasi** dan UAT resep sebelum pelayanan.
 
-Mode produksi saat ini adalah Desktop/JAB. Jalankan E-MAS dan Khanza pada sesi
-Windows pengguna yang sama, kemudian atur `config.toml`:
+Upgrade tidak mengganti database lokal, mapping, registry obat belum dipetakan,
+Knowledge Base DDI, audit, backup, konfigurasi commissioning, atau profil
+layanan yang sudah valid.
+
+## Menggunakan Desktop / JAB tanpa database Khanza
+
+Desktop/JAB adalah cara standar untuk memakai E-MAS pada PC farmasi saat ini.
+Tidak diperlukan pembuatan view Khanza, akun database read-only, konfigurasi IP
+server, maupun password database.
+
+Prasyarat:
+
+1. Khanza dan E-MAS berjalan pada komputer serta sesi Windows pengguna yang
+   sama.
+2. Metode pembacaan resep pada onboarding dipilih **Desktop / JAB**.
+3. Khanza boleh dibuka sebelum atau sesudah E-MAS. Jika belum terbuka, status
+   akan menampilkan **Menunggu SIMRS Khanza dibuka** dan tersambung otomatis
+   saat Khanza tersedia.
+4. Jika Khanza ditutup, Desktop/JAB tetap aktif dan akan menyambung kembali
+   otomatis ketika Khanza dibuka lagi.
+
+Konfigurasi utama pada `C:\ProgramData\eMSSFarmasi\config.toml`:
 
 ```toml
 khanza_adapter = "desktop"
@@ -67,150 +151,157 @@ khanza_stability_interval_seconds = 2.0
 khanza_stability_max_attempts = 3
 ```
 
-Jangan menetapkan `khanza_desktop_bridge_path` ke executable UAT sementara.
-Installer sudah memasang `KhanzaBridge.exe` bersama aplikasi.
+`KhanzaBridge.exe` sudah berada di paket aplikasi. Jangan mengarahkan
+`khanza_desktop_bridge_path` ke executable UAT sementara atau ke folder hasil
+build pengembangan.
 
-Overlay hanya diaktifkan setelah UAT workstation membuktikan baris yang tepat
-disorot pada skala Windows 100%, 125%, atau 150%:
+### Alur kerja apoteker
+
+1. Buka detail resep pada Khanza hingga daftar obat terlihat lengkap.
+2. Tunggu E-MAS membaca resep hingga tampilan resep stabil.
+3. E-MAS melakukan identifikasi resep, mapping obat, dan evaluasi DDI.
+4. Bila ada DDI, popup agregat menampilkan jumlah interaksi, tingkat keparahan,
+   pasangan obat, dan tindakan klinis ringkas.
+5. Klik **Lihat Detail Lengkap** untuk melihat mekanisme, efek klinis,
+   manajemen, sumber/provenance, dan informasi klinis lain yang tersedia.
+6. Tinjau resep dan dokumentasikan intervensi sesuai kebijakan rumah sakit.
+
+Hasil pemeriksaan dapat berupa:
+
+| Status | Arti |
+| --- | --- |
+| DDI ditemukan | Ada pasangan interaksi yang perlu ditinjau. |
+| Lengkap, tanpa DDI | Seluruh data dapat dinilai dan tidak ditemukan DDI pada KB aktif. |
+| Partial / unmapped | Ada obat belum terpetakan atau knowledge belum cukup; hasil tidak boleh dianggap aman. |
+| Gangguan teknis | Resep atau komponen yang diperlukan belum dapat dibaca secara valid. |
+
+## Overlay penanda obat di Khanza
+
+Overlay adalah penanda visual tambahan pada nama obat yang terlibat DDI.
+Overlay tidak menggantikan popup dan audio.
+
+Overlay baru boleh diaktifkan setelah UAT pada workstation membuktikan bahwa
+baris yang ditandai benar pada skala Windows 100%, 125%, atau 150%. Konfigurasi
+opt-in tersebut adalah:
 
 ```toml
 khanza_desktop_overlay_poc = true
 ```
 
-Jika pembacaan Desktop/JAB atau koordinat tabel tidak dapat dibuktikan aman,
-overlay disembunyikan. Popup dan audio tetap dapat berjalan; overlay bukan jalur
-klinis utama.
+Jika ukuran tabel, koordinat layar, DPI, atau pembacaan Desktop/JAB tidak cukup
+pasti, overlay akan disembunyikan untuk mencegah penandaan baris yang salah.
+Skrining, popup, dan audio tetap berjalan.
 
-## Koneksi Khanza: MySQL fallback
+## MySQL/MariaDB sebagai fallback
 
-MySQL hanya dipakai jika disetujui dan Desktop/JAB tidak digunakan:
-
-```toml
-khanza_adapter = "mysql"
-khanza_host = "IP_SERVER_KHANZA"
-khanza_port = 3306
-khanza_database = "sik"
-khanza_username = "emss_readonly"
-khanza_polling_enabled = true
-khanza_internal_polling_consent = true
-```
-
-Gunakan akun `emss_readonly` yang hanya memperoleh `SELECT` pada empat view
-integrasi. Password **tidak** boleh ditulis pada `config.toml`; simpan sebagai
-Windows Machine Environment Variable `EMSS_KHANZA_PASSWORD`.
-
-SQL resmi view dan contoh hak akses tersedia di:
-
-- [templates/khanza_integration_views_mariadb104.sql](templates/khanza_integration_views_mariadb104.sql)
-- [templates/khanza_readonly_grants.example.sql](templates/khanza_readonly_grants.example.sql)
-- [docs/KHANZA_VIEW_CONTRACT_SPRINT_6.md](docs/KHANZA_VIEW_CONTRACT_SPRINT_6.md)
-
-> Invariant: `Desktop/JAB XOR MySQL`. Jangan mengaktifkan dua sumber resep
-> sekaligus.
-
-## Penggunaan operasional
-
-1. Pastikan status sistem menunjukkan **SIAP DIGUNAKAN**.
-2. Buka resep pada Khanza sampai detail resep dan daftar obat tampil stabil.
-3. E-MAS membaca resep, melakukan mapping, lalu mengevaluasi DDI pada KB aktif.
-4. Hasil dibedakan menjadi DDI ditemukan, nol DDI dengan asesmen lengkap,
-   partial/unmapped, atau gangguan teknis. Kondisi belum lengkap tidak pernah
-   diberi label SAFE.
-5. Apoteker meninjau popup/antrean dan mencatat intervensi sesuai kebijakan RS.
-
-Menu Admin/KFT mengelola mapping, Knowledge Base, dashboard kualitas, backup,
-paket update KB, dan status operasional. Mode Farmasi hanya menggunakan KB
-production dan tidak dapat publish, rollback, restore, atau mengubah konfigurasi.
-
-## Knowledge Base DDI dan mapping
-
-- Hanya satu KB Published/Active dipakai untuk skrining production.
-- Draft tidak memengaruhi skrining production.
-- Provenance Medscape dan Drugs.com dipertahankan per rule; perbedaan severity
-  menjadi conflict/review, bukan overwrite diam-diam.
-- `DrugComponentMapping` aktif tidak berarti knowledge DDI lengkap. Obat mapped
-  tetapi KB belum lengkap tidak boleh menjadi SAFE.
-- Gunakan menu **Obat Belum Dipetakan** untuk obat Khanza baru dan lakukan review
-  sebelum mapping diaktifkan.
-
-## Backup, pemulihan, dan update KB
-
-Login sebagai Admin/Super Admin untuk:
-
-- membuat dan memverifikasi backup lokal;
-- melihat ringkasan sebelum restore dan melakukan restore terkonfirmasi;
-- memasang paket update KB yang telah divalidasi checksum/manifesnya;
-- melihat status workstation RALAN/RANAP terhadap versi KB target.
-
-Backup diletakkan di `C:\ProgramData\eMSSFarmasi\Backups\`. Backup dan update
-KB tidak berada pada jalur kritis skrining resep.
-
-## Pengembangan dan pengujian
-
-Persyaratan: Windows 64-bit dan Python 3.13 64-bit.
-
-```powershell
-py -3.13 -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[test]"
-scripts\run_dev.bat --config config.example.toml init-db
-scripts\run_dev.bat --config config.example.toml gui
-```
-
-Jalankan test terarah sesuai perubahan. Contoh test rilis installer:
-
-```powershell
-.venv\Scripts\python.exe -m pytest tests\test_release_config.py -q
-```
-
-## Mengunggah pembaruan ke GitHub
-
-Repository ini sudah terhubung ke:
-<https://github.com/fauzi170290/E--MAS-Farmasi-V-1-2026>
-
-Unggah **source repository ini**, bukan seluruh folder build. Yang perlu masuk
-ke GitHub adalah folder/file source berikut bila berubah:
+Integrasi MySQL/MariaDB tetap tersedia untuk lingkungan yang memang memerlukan
+fallback tersebut. Jalur ini tidak dijalankan bersama Desktop/JAB.
 
 ```text
-src/
-tests/
-migrations/
-native/
-installer/
-templates/
-docs/
-seed/
-scripts/
-AGENTS.md
-README.md
-CHANGELOG.md
-pyproject.toml
-emss-farmasi.spec
-.gitignore
+Desktop/JAB XOR MySQL
 ```
 
-Jangan unggah `.venv/`, `.vb/`, `.pytest-*/`, `.tmp-*/`, `build*/`, `dist*/`,
-`outputs/`, `toolchain/`, `*.db`, `*.log`, `config.toml`, password, atau data
-pasien. Aturan ini sudah tercantum di `.gitignore`.
+Untuk MySQL, rumah sakit harus memakai akun khusus read-only dengan hak `SELECT`
+pada view integrasi yang disetujui. Password tidak boleh disimpan di
+`config.toml`; gunakan Windows Machine Environment Variable
+`EMSS_KHANZA_PASSWORD`.
 
-Gunakan Git untuk memperbarui repository yang sudah ada:
+Dokumen dan script yang relevan:
 
-```powershell
-Set-Location "C:\Users\ozie1\Documents\Codex\2026-08-28\files-pasted-by-the-user-prompt\work\emas-farmasi"
-git status
-git add -A
-git status
-git commit -m "Release 1.0.6: bundle Khanza bridge and overlay"
-git push origin main
-```
+- [Kontrak view Khanza](docs/KHANZA_VIEW_CONTRACT_SPRINT_6.md)
+- [Script view MariaDB](templates/khanza_integration_views_mariadb104.sql)
+- [Contoh hak akses read-only](templates/khanza_readonly_grants.example.sql)
 
-Sebelum `git commit`, periksa `git status` dan pastikan tidak ada folder cache,
-database, config lokal, atau output installer yang ikut masuk.
+## Mapping obat dan Knowledge Base DDI
 
-## Keamanan dan batasan
+### Mapping obat
 
-- Jangan menyimpan password Khanza, secret, atau data pasien di source, README,
-  GitHub, screenshot, atau log dukungan.
-- E-MAS tidak menggantikan keputusan klinis apoteker/KFT.
-- Kegagalan audio atau overlay tidak boleh menghentikan evaluasi DDI dan popup.
-- Bila sumber resep, KB aktif, mapping, atau data resep tidak dapat dinilai
-  lengkap, sistem harus menunjukkan kondisi perlu perhatian/gangguan, bukan SAFE.
+Obat Khanza dipetakan ke zat aktif kanonik sebelum evaluasi DDI. Bila obat baru
+belum dipetakan, E-MAS memasukkannya ke **Obat Belum Dipetakan** agar dapat
+ditinjau Admin/KFT. Mapping tidak dibuat otomatis dari kemiripan nama obat.
+
+Obat mapped tidak otomatis berarti seluruh knowledge DDI sudah lengkap. E-MAS
+menjaga kondisi ini sebagai partial/unmapped agar tidak menghasilkan false SAFE.
+
+### Knowledge Base DDI
+
+Knowledge Base memiliki lifecycle DRAFT, REVIEW/PENDING, PUBLISHED/ACTIVE, dan
+HISTORICAL/RETIRED sesuai governance yang tersedia. Hanya satu versi Production
+aktif pada satu waktu.
+
+- Draft tidak memengaruhi skrining produksi.
+- Publish dan rollback hanya untuk Admin/Super Admin sesuai RBAC.
+- Provenance Medscape dan Drugs.com disimpan terpisah per rule.
+- Perbedaan severity atau informasi antar-sumber menjadi conflict yang perlu
+  review; sistem tidak melakukan overwrite diam-diam.
+- Perubahan KB dicatat dalam audit dan hasil lama dapat diinvalidasi aman saat
+  versi KB aktif berubah.
+
+## Peran pengguna
+
+| Peran | Kewenangan utama |
+| --- | --- |
+| Mode Farmasi / Apoteker | Membaca hasil skrining, antrean resep, dan dokumentasi intervensi sesuai hak akses. |
+| KFT / Clinical Reviewer | Meninjau mapping dan knowledge sesuai kebijakan yang diberikan. |
+| Admin / Super Admin | Mengelola konfigurasi, mapping, KB, publish/rollback, backup/restore, paket KB, serta pemulihan operasional. |
+
+Publish, rollback, restore, pemasangan paket KB, dan recovery bridge dilindungi
+otorisasi backend; menyembunyikan tombol saja tidak dianggap sebagai kontrol
+akses.
+
+## Status operasional dan pemulihan
+
+Buka **Status Operasional & Pemulihan** untuk melihat:
+
+- Database Lokal;
+- Knowledge Base DDI aktif;
+- konfigurasi layanan RALAN/RANAP;
+- Prescription Source;
+- Khanza/JAB dan KhanzaBridge;
+- audio dan overlay.
+
+Status menggunakan **Siap**, **Perlu Perhatian**, **Gangguan**, atau **Belum
+Diverifikasi**. Admin dapat memakai **Periksa Ulang** atau **Coba Pulihkan
+Bridge**. Recovery tidak me-restart Khanza, tidak mengubah database Khanza, dan
+tidak boleh membuat bridge ganda.
+
+## Backup, restore, dan pembaruan KB
+
+Menu **Pencadangan & Pemulihan** tersedia untuk Admin/Super Admin. Gunakan
+**Buat Backup** sebelum perubahan administratif besar. Backup diverifikasi
+sebelum dinyatakan berhasil dan disimpan pada folder `Backups`.
+
+Restore selalu memvalidasi paket dan menampilkan ringkasan sebelum overwrite.
+Jika restore gagal, state lama dipertahankan sejauh arsitektur lokal
+memungkinkan.
+
+Paket update Knowledge Base menggunakan manifest, versi, checksum, dan
+provenance. Sebelum pemasangan, E-MAS membuat backup otomatis. Paket rusak,
+checksum salah, conflict, atau versi lama tidak boleh menimpa KB aktif secara
+diam-diam.
+
+## Privasi dan keamanan
+
+- Jangan menyimpan password Khanza, secret, atau data pasien di konfigurasi
+  yang dibagikan, source code, screenshot, atau log dukungan.
+- E-MAS hanya menyimpan dan menampilkan data yang diperlukan untuk fungsi
+  operasional dan audit setempat.
+- Gunakan akun Khanza dengan hak minimal bila fallback MySQL dipakai.
+- Jangan menempatkan database aktif E-MAS pada folder jaringan bersama.
+- Backup dan media paket KB harus dikelola mengikuti kebijakan keamanan rumah
+  sakit.
+
+## Dokumentasi tambahan
+
+- [Panduan impor mapping obat](docs/DRUG_MAPPING_IMPORT_GUIDE.md)
+- [Panduan Knowledge Base DDI](docs/DDI_KNOWLEDGE_BASE_GUIDE.md)
+- [Panduan backup dan restore](docs/BACKUP_RESTORE_SPRINT_9.md)
+- [Checklist UAT installer](PHASE_3_6_INSTALLER_UAT_CHECKLIST.md)
+- [Checklist UAT operational health](PHASE_3_5_OPERATIONAL_HEALTH_UAT_CHECKLIST.md)
+
+## Batasan klinis
+
+E-MAS adalah alat pendukung keputusan. Hasil skrining harus ditinjau bersama
+kondisi pasien, indikasi, dosis, fungsi organ, riwayat terapi, dan pedoman
+rumah sakit yang berlaku. Aplikasi tidak boleh digunakan sebagai pengganti
+penilaian profesional apoteker atau dokter.
