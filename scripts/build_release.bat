@@ -15,6 +15,12 @@ set "PYTHONPATH=%PROJECT_DIR%\src;%PYTHONPATH%"
 set "QUALIFICATION_DIR=%PROJECT_DIR%\outputs\qualification"
 if not exist "%QUALIFICATION_DIR%" mkdir "%QUALIFICATION_DIR%"
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\native\khanza_bridge\build.ps1"
+if errorlevel 1 (
+    echo Build KhanzaBridge x86/x64 gagal.
+    exit /b 7
+)
+
 "%PYTHON_EXE%" -m emss.release.qualification preflight ^
     --project-dir "%PROJECT_DIR%" ^
     --output "%QUALIFICATION_DIR%\preflight.json"
@@ -31,7 +37,11 @@ if errorlevel 1 (
     echo Data lifecycle drill tidak lulus. Build dihentikan.
     exit /b 4
 )
-"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean "%PROJECT_DIR%\emss-farmasi.spec"
+rem A prior PyInstaller work directory can remain locked by a terminated
+rem antivirus/indexer scan. Use a fresh generated workpath; qualification
+rem still validates the complete dist output before it can be packaged.
+set "PYINSTALLER_WORKPATH=%PROJECT_DIR%\outputs\pyinstaller-work-%RANDOM%%RANDOM%"
+"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean --workpath "%PYINSTALLER_WORKPATH%" "%PROJECT_DIR%\emss-farmasi.spec"
 if errorlevel 1 exit /b 5
 
 "%PYTHON_EXE%" -m emss.release.qualification qualify ^

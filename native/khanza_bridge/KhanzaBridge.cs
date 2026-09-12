@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Management;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,7 +14,19 @@ using System.Windows.Forms;
 
 internal static partial class KhanzaBridge
 {
+#if BRIDGE_X64
+    private const string Dll = "windowsaccessbridge-64.dll";
+    private const string BridgeArchitecture = "x64";
+    private const int RequiredPointerSize = 8;
+#else
     private const string Dll = "windowsaccessbridge-32.dll";
+    private const string BridgeArchitecture = "x86";
+    private const int RequiredPointerSize = 4;
+#endif
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+    private const ushort ImageFileMachineUnknown = 0x0000;
+    private const ushort ImageFileMachineI386 = 0x014c;
+    private const ushort ImageFileMachineAmd64 = 0x8664;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     private static readonly object OutputLock = new object();
     private static int _dirty = 1;
@@ -33,9 +46,42 @@ internal static partial class KhanzaBridge
         @"\b\d{4}/\d{2}/\d{2}/\d{6}\b", RegexOptions.CultureInvariant);
     private static readonly Regex PrescriptionIdPattern = new Regex(
         @"(?<!\d)\d{12}(?!\d)", RegexOptions.CultureInvariant);
+    // Khanza launchers legitimately use either `-jar <path>` or `-jar=<path>`.
+    // Deployed Khanza launchers can use a product-prefixed basename ending in
+    // khanza.jar. Reject separators that identify unrelated derived names
+    // (for example reporting-khanza.jar) and any longer suffix.
+    private static readonly Regex KhanzaJarPattern = new Regex(
+        @"(?<![._-])khanza\.jar(?![A-Za-z0-9_.-])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // Some Khanza launchers pass a full JAR path as the value for -jar.  Parse
+    // that option independently of surrounding path characters, while still
+    // requiring the canonical basename rather than a derived JAR filename.
+    private static readonly Regex KhanzaJarLaunchArgumentPattern = new Regex(
+        "(?:^|\\s)-jar(?:\\s+|=)\\s*(?:\"[^\"]*[\\\\/]khanza\\.jar\"|[^\\s\"]*[\\\\/]khanza\\.jar)(?=\\s|$)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool SetDllDirectory(string path);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadProcessMemory(IntPtr process, IntPtr address,
+        [Out] byte[] buffer, int size, out IntPtr bytesRead);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool IsWow64Process2(IntPtr process, out ushort processMachine,
+        out ushort nativeMachine);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool IsWow64Process(IntPtr process, out bool wow64Process);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(IntPtr process, int flags,
+        StringBuilder executableName, ref int size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(IntPtr process, int informationClass,
+        out ProcessBasicInformation information, int informationLength, out int returnLength);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern void Windows_run();
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool isJavaWindow(IntPtr window);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] private static extern bool getAccessibleContextFromHWND(IntPtr window, out int vm, out long context);
@@ -51,6 +97,17 @@ internal static partial class KhanzaBridge
     [DllImport("user32.dll", SetLastError = true)] private static extern bool EnumWindows(WindowCallback callback, IntPtr state);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2a;
+        public IntPtr Reserved2b;
+        public IntPtr UniqueProcessId;
+        public IntPtr Reserved3;
+    }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void SimpleEvent(int vm, long evt, long source);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void TextEvent(int vm, long evt, long source, IntPtr oldValue, IntPtr newValue);
@@ -100,6 +157,49 @@ internal static partial class KhanzaBridge
         public string compound_group = "";
     }
 
+    private sealed class CommandLineEvidence
+    {
+        public string Value = "";
+        public string Method = "NONE";
+        public bool QuerySucceeded;
+        public string FailureReason = "";
+        public int Win32Error;
+    }
+
+    private sealed class UiSignatureEvidence
+    {
+        public bool AccessibleRootObtained;
+        public bool RootFrameMatched;
+        public bool MenuBarMatched;
+        public bool DesktopPaneMatched;
+        public bool SignatureMatched;
+        public int RootChildCount;
+        public int NodesScanned;
+    }
+
+    // This diagnostic contains only process/JAB structure state. It intentionally
+    // excludes window titles, accessible names, patient identity, and prescription data.
+    private sealed class DiscoveryProbe
+    {
+        public int ProcessId;
+        public string ProcessName = "";
+        public bool VisibleWindow;
+        public bool JavaJabWindowMatched;
+        public bool AccessibleRootObtained;
+        public string CommandLineMethod = "NONE";
+        public bool CommandLineQuerySucceeded;
+        public bool KhanzaJarTextPresent;
+        public bool KhanzaJarMatched;
+        public string CommandLineFailureReason = "";
+        public int CommandLineWin32Error;
+        public bool RootFrameMatched;
+        public bool MenuBarMatched;
+        public bool DesktopPaneMatched;
+        public bool SignatureMatched;
+        public int RootChildCount;
+        public int SignatureNodesScanned;
+    }
+
     private sealed class Candidate
     {
         public string NoResep = "";
@@ -113,6 +213,15 @@ internal static partial class KhanzaBridge
         public bool DetailFound;
         public bool Accessible;
         public bool KhanzaDetected;
+        public bool JavaJabCandidateFound;
+        public bool TargetKhanzaFound;
+        public int TargetKhanzaProcessId;
+        public string DetectionEvidence = "";
+        public bool JabAttached;
+        public readonly List<DiscoveryProbe> DiscoveryProbes = new List<DiscoveryProbe>();
+        public DiscoveryProbe PrimaryDiscoveryProbe;
+        public string IdentityState = "KHANZA_NOT_FOUND";
+        public string PrescriptionState = "PRESCRIPTION_VIEW_NOT_FOUND";
         public string DetailNoRawat = "";
         public bool DetailIdentityAmbiguous;
         public string CareSetting = "";
@@ -159,17 +268,58 @@ internal static partial class KhanzaBridge
         _overlayEnabled = Array.IndexOf(args, "--overlay-poc") >= 0;
         _overlayProbe = _overlayEnabled && Environment.GetEnvironmentVariable("EMAS_OVERLAY_UAT_DIAGNOSTICS") == "1";
         if (_overlayEnabled) ConfigureOverlayDpiAwareness();
-        if (IntPtr.Size != 4)
+        if (Array.IndexOf(args, "--probe-khanza-runtime") >= 0)
         {
-            EmitStatus("ERROR", "BRIDGE_REQUIRES_X86");
+            KhanzaRuntimeProbe runtime = FindKhanzaRuntime();
+            Emit(new Dictionary<string, object> {
+                { "type", "runtime_probe" },
+                { "target_found", runtime.Found },
+                { "target_pid", runtime.ProcessId },
+                { "target_session_id", runtime.SessionId },
+                { "java_architecture", runtime.Architecture },
+                { "command_line_method", runtime.CommandLineMethod },
+                { "command_line_query_succeeded", runtime.CommandLineQuerySucceeded },
+                { "khanza_jar_matched", runtime.KhanzaJarMatched },
+                { "probe_architecture", BridgeArchitecture }
+            });
+            return runtime.Found ? 0 : 7;
+        }
+        if (IntPtr.Size != RequiredPointerSize)
+        {
+            EmitStatus("ERROR", "BRIDGE_REQUIRES_" + BridgeArchitecture.ToUpperInvariant());
             return 2;
         }
         if (Array.IndexOf(args, "--self-test") >= 0)
         {
             bool passed = RunSelfTest();
             EmitStatus(passed ? "SELF_TEST_PASS" : "ERROR",
-                passed ? "X86_JSON_AND_QUANTITY_FILTER_READY" : "QUANTITY_FILTER_FAILED");
+                passed ? BridgeArchitecture.ToUpperInvariant() + "_DISCOVERY_AND_QUANTITY_FILTER_READY" : "DISCOVERY_OR_QUANTITY_FILTER_FAILED");
             return passed ? 0 : 4;
+        }
+        foreach (string argument in args)
+        {
+            const string probePrefix = "--probe-command-line=";
+            if (!argument.StartsWith(probePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+            int processId;
+            if (!Int32.TryParse(argument.Substring(probePrefix.Length), out processId))
+            {
+                EmitStatus("ERROR", "PROBE_PID_INVALID");
+                return 5;
+            }
+            CommandLineEvidence commandLine = ReadProcessCommandLine(processId);
+            Emit(new Dictionary<string, object> {
+                { "type", "probe" }, { "process_id", processId },
+                { "command_line_available", commandLine.Value.Length > 0 },
+                { "command_line_method", commandLine.Method },
+                { "command_line_query_succeeded", commandLine.QuerySucceeded },
+                { "command_line_failure_reason", commandLine.FailureReason },
+                { "command_line_win32_error", commandLine.Win32Error },
+                { "khanza_jar_text_present", ContainsKhanzaJarText(commandLine.Value) },
+                { "khanza_jar_launch_argument", KhanzaJarLaunchArgumentPattern.IsMatch(commandLine.Value ?? "") },
+                { "khanza_jar_boundary", DescribeKhanzaJarBoundary(commandLine.Value) },
+                { "khanza_jar_detected", IsKhanzaJavaProcess("java", commandLine.Value) }
+            });
+            return commandLine.Value.Length > 0 ? 0 : 6;
         }
         try
         {
@@ -303,9 +453,50 @@ internal static partial class KhanzaBridge
             if ((!String.Equals(processName, "java", StringComparison.OrdinalIgnoreCase) &&
                 !String.Equals(processName, "javaw", StringComparison.OrdinalIgnoreCase)) || !isJavaWindow(window)) return true;
             visibleJavaWindows++;
+            result.JavaJabCandidateFound = true;
+            DiscoveryProbe probe = new DiscoveryProbe {
+                ProcessId = (int)pid, ProcessName = processName,
+                VisibleWindow = true, JavaJabWindowMatched = true
+            };
+            result.DiscoveryProbes.Add(probe);
+            SelectPrimaryDiscoveryProbe(result, probe);
             int vm; long context;
             if (!getAccessibleContextFromHWND(window, out vm, out context)) return true;
             result.Accessible = true;
+            result.JabAttached = true;
+            probe.AccessibleRootObtained = true;
+            CommandLineEvidence commandLine = ReadProcessCommandLine((int)pid);
+            probe.CommandLineMethod = commandLine.Method;
+            probe.CommandLineQuerySucceeded = commandLine.QuerySucceeded;
+            probe.CommandLineFailureReason = commandLine.FailureReason;
+            probe.CommandLineWin32Error = commandLine.Win32Error;
+            probe.KhanzaJarTextPresent = ContainsKhanzaJarText(commandLine.Value);
+            bool jarEvidence = IsKhanzaJavaProcess(processName, commandLine.Value);
+            probe.KhanzaJarMatched = jarEvidence;
+            UiSignatureEvidence signature = jarEvidence ? new UiSignatureEvidence {
+                AccessibleRootObtained = true
+            } : InspectKhanzaUiSignature(vm, context);
+            probe.RootFrameMatched = signature.RootFrameMatched;
+            probe.MenuBarMatched = signature.MenuBarMatched;
+            probe.DesktopPaneMatched = signature.DesktopPaneMatched;
+            probe.SignatureMatched = signature.SignatureMatched;
+            probe.RootChildCount = signature.RootChildCount;
+            probe.SignatureNodesScanned = signature.NodesScanned;
+            SelectPrimaryDiscoveryProbe(result, probe);
+            bool signatureEvidence = signature.SignatureMatched;
+            if (!jarEvidence && !signatureEvidence)
+            {
+                result.DetectionEvidence = "UNVERIFIED_JAVA";
+                Release(vm, context);
+                return true;
+            }
+            result.TargetKhanzaFound = true;
+            if (result.TargetKhanzaProcessId == 0)
+            {
+                result.TargetKhanzaProcessId = (int)pid;
+                result.DetectionEvidence = jarEvidence ? "KHANZA_JAR" : "JAB_UI_SIGNATURE";
+            }
+            result.KhanzaDetected = true;
             try { Walk(result, tables, vm, context, 0, timer, ref nodes, window, null, false, null); }
             finally { Release(vm, context); }
             // Once one complete detail subtree has been read, additional visible
@@ -323,6 +514,245 @@ internal static partial class KhanzaBridge
         return result;
     }
 
+    private static bool IsKhanzaJavaProcess(string processName, string commandLine)
+    {
+        bool javaRuntime = String.Equals(processName, "java", StringComparison.OrdinalIgnoreCase) ||
+            String.Equals(processName, "javaw", StringComparison.OrdinalIgnoreCase);
+        string value = commandLine ?? "";
+        return javaRuntime && (KhanzaJarPattern.IsMatch(value) ||
+            KhanzaJarLaunchArgumentPattern.IsMatch(value));
+    }
+
+    private sealed class KhanzaRuntimeProbe
+    {
+        public bool Found;
+        public int ProcessId;
+        public uint SessionId;
+        public string Architecture = "unknown";
+        public string ExecutablePath = "";
+        public string CommandLineMethod = "NONE";
+        public bool CommandLineQuerySucceeded;
+        public bool KhanzaJarMatched;
+    }
+
+    private static bool ContainsKhanzaJarText(string commandLine)
+    {
+        return (commandLine ?? "").IndexOf("khanza.jar", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    // Diagnostic-only: describe the surrounding character classes without
+    // emitting the command line or a filesystem path.
+    private static string DescribeKhanzaJarBoundary(string commandLine)
+    {
+        string value = commandLine ?? "";
+        int index = value.IndexOf("khanza.jar", StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return "TEXT_NOT_PRESENT";
+        int after = index + "khanza.jar".Length;
+        return "BEFORE_" + DescribeBoundaryCharacter(index > 0 ? value[index - 1] : '\0') +
+            "_AFTER_" + DescribeBoundaryCharacter(after < value.Length ? value[after] : '\0');
+    }
+
+    private static string DescribeBoundaryCharacter(char value)
+    {
+        if (value == '\0') return "END";
+        if (Char.IsLetterOrDigit(value)) return "ALNUM";
+        if (Char.IsWhiteSpace(value)) return "SPACE";
+        if (value == '.') return "DOT";
+        if (value == '-') return "HYPHEN";
+        if (value == '_') return "UNDERSCORE";
+        if (value == '\\') return "BACKSLASH";
+        if (value == '/') return "SLASH";
+        if (value == '"') return "QUOTE";
+        return "OTHER";
+    }
+
+    private static CommandLineEvidence ReadProcessCommandLine(int processId)
+    {
+        CommandLineEvidence evidence = new CommandLineEvidence { Method = "WMI" };
+        // WMI is queried only for an already-visible Java/JAB window and its PID.
+        // The command itself is never emitted or logged.
+        try
+        {
+            using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                "SELECT CommandLine FROM Win32_Process WHERE ProcessId=" + processId.ToString()))
+            {
+                foreach (ManagementObject row in searcher.Get())
+                {
+                    string commandLine = Convert.ToString(row["CommandLine"]) ?? "";
+                    if (commandLine.Length > 0)
+                    {
+                        evidence.Value = commandLine;
+                        evidence.QuerySucceeded = true;
+                        return evidence;
+                    }
+                }
+            }
+            evidence.FailureReason = "WMI_EMPTY";
+        }
+        catch (Exception exc)
+        {
+            // Keep the type only; ManagementException details may include endpoint data.
+            evidence.FailureReason = "WMI_" + exc.GetType().Name;
+        }
+
+        // Some endpoints deny WMI even for a visible Java process. The x86 PEB
+        // fallback is read-only and is attempted only on this proven Java/JAB PID.
+        CommandLineEvidence peb = ReadX86ProcessCommandLine(processId);
+        if (peb.QuerySucceeded) return peb;
+        evidence.Method = "WMI>PEB_X86";
+        evidence.FailureReason = evidence.FailureReason + ";" + peb.FailureReason;
+        evidence.Win32Error = peb.Win32Error;
+        return evidence;
+    }
+
+    private static string ContextRole(ContextInfo info)
+    {
+        string role = Normalize(info.roleUS);
+        return role.Length > 0 ? role : Normalize(info.role);
+    }
+
+    private static UiSignatureEvidence InspectKhanzaUiSignature(int vm, long root)
+    {
+        UiSignatureEvidence evidence = new UiSignatureEvidence();
+        ContextInfo rootInfo;
+        if (!getAccessibleContextInfo(vm, root, out rootInfo)) return evidence;
+        evidence.AccessibleRootObtained = true;
+        evidence.RootFrameMatched = Normalize(ContextRole(rootInfo)) == "frame";
+        evidence.RootChildCount = Math.Max(rootInfo.children, 0);
+        ScanKhanzaUiRoles(vm, root, 0, ref evidence.NodesScanned,
+            ref evidence.MenuBarMatched, ref evidence.DesktopPaneMatched);
+        // Structural JAB evidence only. No window title, hospital name, geometry,
+        // theme/color, accessible name, patient identity, or prescription content.
+        evidence.SignatureMatched = IsKhanzaStructuralSignature(
+            evidence.RootFrameMatched ? "frame" : "", evidence.MenuBarMatched, evidence.DesktopPaneMatched);
+        return evidence;
+    }
+
+    private static bool IsKhanzaStructuralSignature(string rootRole, bool menuBar, bool desktopPane)
+    {
+        return Normalize(rootRole) == "frame" && menuBar && desktopPane;
+    }
+
+    private static void ScanKhanzaUiRoles(int vm, long context, int depth, ref int nodes,
+        ref bool menuBar, ref bool desktopPane)
+    {
+        if (depth > 6 || nodes >= 160 || (menuBar && desktopPane)) return;
+        ContextInfo info;
+        if (!getAccessibleContextInfo(vm, context, out info)) return;
+        nodes++;
+        string role = ContextRole(info);
+        if (role == "menu bar") menuBar = true;
+        if (role == "desktop pane") desktopPane = true;
+        int children = Math.Min(Math.Max(info.children, 0), 48);
+        for (int index = 0; index < children && nodes < 160 && !(menuBar && desktopPane); index++)
+        {
+            long child = getAccessibleChildFromContext(vm, context, index);
+            if (child == 0) continue;
+            try { ScanKhanzaUiRoles(vm, child, depth + 1, ref nodes, ref menuBar, ref desktopPane); }
+            finally { Release(vm, child); }
+        }
+    }
+
+    private static CommandLineEvidence ReadX86ProcessCommandLine(int processId)
+    {
+        CommandLineEvidence evidence = new CommandLineEvidence { Method = "PEB_X86" };
+        const uint ProcessQueryInformation = 0x0400;
+        const uint ProcessVmRead = 0x0010;
+        const int PebProcessParametersOffset = 0x10;
+        const int ProcessParametersCommandLineOffset = 0x40;
+        if (IntPtr.Size != 4) { evidence.FailureReason = "PEB_REQUIRES_X86"; return evidence; }
+        IntPtr process = OpenProcess(ProcessQueryInformation | ProcessVmRead, false, processId);
+        if (process == IntPtr.Zero)
+        {
+            evidence.FailureReason = "OPEN_PROCESS_FAILED";
+            evidence.Win32Error = Marshal.GetLastWin32Error();
+            return evidence;
+        }
+        try
+        {
+            ProcessBasicInformation basic;
+            int returned;
+            int ntStatus = NtQueryInformationProcess(process, 0, out basic,
+                Marshal.SizeOf(typeof(ProcessBasicInformation)), out returned);
+            if (ntStatus != 0 || basic.PebBaseAddress == IntPtr.Zero)
+            {
+                evidence.FailureReason = "NT_QUERY_FAILED:" + ntStatus.ToString();
+                return evidence;
+            }
+            byte[] pointerBytes = new byte[4];
+            IntPtr read;
+            if (!ReadProcessMemory(process, IntPtr.Add(basic.PebBaseAddress,
+                PebProcessParametersOffset), pointerBytes, pointerBytes.Length, out read))
+            {
+                evidence.FailureReason = "READ_PEB_PARAMETERS_FAILED";
+                evidence.Win32Error = Marshal.GetLastWin32Error();
+                return evidence;
+            }
+            IntPtr parameters = new IntPtr(BitConverter.ToInt32(pointerBytes, 0));
+            if (parameters == IntPtr.Zero) { evidence.FailureReason = "PEB_PARAMETERS_EMPTY"; return evidence; }
+            byte[] unicodeString = new byte[8];
+            if (!ReadProcessMemory(process, IntPtr.Add(parameters,
+                ProcessParametersCommandLineOffset), unicodeString, unicodeString.Length, out read))
+            {
+                evidence.FailureReason = "READ_COMMAND_LINE_DESCRIPTOR_FAILED";
+                evidence.Win32Error = Marshal.GetLastWin32Error();
+                return evidence;
+            }
+            int length = BitConverter.ToUInt16(unicodeString, 0);
+            if (length <= 0 || length > 32766) { evidence.FailureReason = "COMMAND_LINE_LENGTH_INVALID"; return evidence; }
+            IntPtr buffer = new IntPtr(BitConverter.ToInt32(unicodeString, 4));
+            if (buffer == IntPtr.Zero) { evidence.FailureReason = "COMMAND_LINE_BUFFER_EMPTY"; return evidence; }
+            byte[] text = new byte[length];
+            if (!ReadProcessMemory(process, buffer, text, text.Length, out read) ||
+                read.ToInt32() != text.Length)
+            {
+                evidence.FailureReason = "READ_COMMAND_LINE_TEXT_FAILED";
+                evidence.Win32Error = Marshal.GetLastWin32Error();
+                return evidence;
+            }
+            evidence.Value = Encoding.Unicode.GetString(text);
+            evidence.QuerySucceeded = evidence.Value.Length > 0;
+            if (!evidence.QuerySucceeded) evidence.FailureReason = "COMMAND_LINE_EMPTY";
+            return evidence;
+        }
+        catch (Exception exc) { evidence.FailureReason = "PEB_" + exc.GetType().Name; return evidence; }
+        finally { CloseHandle(process); }
+    }
+
+    private static void SelectPrimaryDiscoveryProbe(Candidate candidate, DiscoveryProbe probe)
+    {
+        if (candidate.PrimaryDiscoveryProbe == null || DiscoveryProbeScore(probe) > DiscoveryProbeScore(candidate.PrimaryDiscoveryProbe))
+            candidate.PrimaryDiscoveryProbe = probe;
+    }
+
+    private static int DiscoveryProbeScore(DiscoveryProbe probe)
+    {
+        return (probe.KhanzaJarMatched ? 16 : 0) + (probe.SignatureMatched ? 8 : 0) +
+            (probe.AccessibleRootObtained ? 4 : 0) + (probe.JavaJabWindowMatched ? 2 : 0) +
+            (probe.VisibleWindow ? 1 : 0);
+    }
+
+    private static Dictionary<string, object> DiscoveryProbePayload(DiscoveryProbe probe)
+    {
+        if (probe == null) return new Dictionary<string, object>();
+        return new Dictionary<string, object> {
+            { "pid", probe.ProcessId }, { "process_name", probe.ProcessName },
+            { "visible_window", probe.VisibleWindow }, { "jab_window_matched", probe.JavaJabWindowMatched },
+            { "accessible_root_obtained", probe.AccessibleRootObtained },
+            { "command_line_method", probe.CommandLineMethod },
+            { "command_line_query_succeeded", probe.CommandLineQuerySucceeded },
+            { "khanza_jar_text_present", probe.KhanzaJarTextPresent },
+            { "khanza_jar_matched", probe.KhanzaJarMatched },
+            { "command_line_failure_reason", probe.CommandLineFailureReason },
+            { "command_line_win32_error", probe.CommandLineWin32Error },
+            { "root_frame_matched", probe.RootFrameMatched },
+            { "menu_bar_matched", probe.MenuBarMatched },
+            { "desktop_pane_matched", probe.DesktopPaneMatched },
+            { "signature_final_matched", probe.SignatureMatched },
+            { "root_child_count", probe.RootChildCount },
+            { "signature_nodes_scanned", probe.SignatureNodesScanned }
+        };
+    }
     private static void Walk(Candidate result, HashSet<string> seenTables, int vm, long context,
         int depth, Stopwatch timer, ref int nodes, IntPtr window, int[] clip, bool viewport,
         int[] viewportRect,
@@ -578,14 +1008,44 @@ internal static partial class KhanzaBridge
         return normalized.Length <= maximum ? normalized : "";
     }
 
+    private static void AssignDiscoveryStates(Candidate candidate)
+    {
+        candidate.IdentityState = candidate.KhanzaDetected ? "KHANZA_CONNECTED" :
+            (candidate.JavaJabCandidateFound ?
+                (candidate.JabAttached ? "KHANZA_UNVERIFIED" : "JAB_ATTACH_FAILED") :
+                "KHANZA_NOT_FOUND");
+        candidate.PrescriptionState = candidate.KhanzaDetected && candidate.Complete ?
+            "PRESCRIPTION_READY" : "PRESCRIPTION_VIEW_NOT_FOUND";
+    }
+
+    // Discovery is observed twice before a snapshot can be published. Preserve a
+    // candidate seen by either read so a transient second scan never turns an
+    // observed Java/JAB window into the misleading KHANZA_NOT_FOUND state.
+    private static void PreserveCandidateEvidence(Candidate current, Candidate observed)
+    {
+        if (current.KhanzaDetected || !observed.JavaJabCandidateFound) return;
+        current.JavaJabCandidateFound = true;
+        current.JabAttached = current.JabAttached || observed.JabAttached;
+        if (current.PrimaryDiscoveryProbe == null && observed.PrimaryDiscoveryProbe != null)
+        {
+            current.PrimaryDiscoveryProbe = observed.PrimaryDiscoveryProbe;
+            current.DiscoveryProbes.Add(observed.PrimaryDiscoveryProbe);
+        }
+        if (current.DetectionEvidence.Length == 0)
+            current.DetectionEvidence = observed.DetectionEvidence;
+    }
+
     private static void Publish(Candidate first, Candidate second)
     {
+        PreserveCandidateEvidence(second, first);
+        AssignDiscoveryStates(second);
         string connectionState = second.KhanzaDetected ? "CONNECTED" : "DISCONNECTED";
-        if (connectionState != _lastConnectionState)
+        string connectionReason = second.IdentityState;
+        string connectionSignature = connectionState + "|" + connectionReason + "|" + second.PrescriptionState;
+        if (connectionSignature != _lastConnectionState)
         {
-            EmitStatus(connectionState, second.KhanzaDetected ? "KHANZA_UI_DETECTED" :
-                (second.Accessible ? "KHANZA_UI_NOT_DETECTED" : "KHANZA_NOT_FOUND"));
-            _lastConnectionState = connectionState;
+            EmitStatus(connectionState, connectionReason, second);
+            _lastConnectionState = connectionSignature;
         }
         if (!second.KhanzaDetected)
         {
@@ -819,11 +1279,55 @@ internal static partial class KhanzaBridge
         changedOrder.Regular.Add(new Item { source_item_key = "row:2", drug_code = "OBAT-B", raw_quantity = "3" });
         bool rowOrderStable = Fingerprint(orderA) == Fingerprint(orderB) &&
             Fingerprint(orderA) != Fingerprint(changedOrder);
+        bool khanzaJavaDetected = IsKhanzaJavaProcess("java",
+            "java -jar C:\\SIMRS\\khanza.jar");
+        bool khanzaJavawDetected = IsKhanzaJavaProcess("javaw",
+            "javaw -jar \"C:\\SIMRS\\KHANZA.JAR\"");
+        bool khanzaEqualsArgumentDetected = IsKhanzaJavaProcess("java",
+            "java -jar=C:\\SIMRS\\khanza.jar");
+        bool khanzaQuotedEqualsArgumentDetected = IsKhanzaJavaProcess("javaw",
+            "javaw -jar=\"C:\\SIMRS\\khanza.jar\"");
+        bool khanzaProductPrefixedDetected = IsKhanzaJavaProcess("java",
+            "java -cp C:\\SIMRS\\SIMRSKhanza.jar");
+        bool khanzaPathArgumentDetected = IsKhanzaJavaProcess("java",
+            "java -jar C:\\SIMRS\\release-khanza.jar\\..\\khanza.jar");
+        bool otherJavaRejected = !IsKhanzaJavaProcess("java",
+            "java -jar C:\\Tools\\reporting.jar") &&
+            !IsKhanzaJavaProcess("java", "java -jar C:\\Tools\\reporting-khanza.jar") &&
+            !IsKhanzaJavaProcess("java", "java -jar C:\\SIMRS\\khanza.jar.bak");
+        bool signatureAccepted = IsKhanzaStructuralSignature("frame", true, true);
+        bool signatureRejected = !IsKhanzaStructuralSignature("frame", true, false) &&
+            !IsKhanzaStructuralSignature("dialog", true, true);
+        Candidate connectedWithoutPrescription = new Candidate { KhanzaDetected = true };
+        AssignDiscoveryStates(connectedWithoutPrescription);
+        Candidate prescriptionReady = new Candidate {
+            KhanzaDetected = true, DetailFound = true, NoResep = "RX-READY",
+            NoRawat = "2026/09/05/000004", CareSetting = "RALAN"
+        };
+        prescriptionReady.Regular.Add(new Item { drug_code = "OBAT-READY", raw_quantity = "1" });
+        AssignDiscoveryStates(prescriptionReady);
+        bool discoveryStates = connectedWithoutPrescription.IdentityState == "KHANZA_CONNECTED" &&
+            connectedWithoutPrescription.PrescriptionState == "PRESCRIPTION_VIEW_NOT_FOUND" &&
+            prescriptionReady.IdentityState == "KHANZA_CONNECTED" &&
+            prescriptionReady.PrescriptionState == "PRESCRIPTION_READY";
+        Candidate firstUnverified = new Candidate {
+            JavaJabCandidateFound = true, JabAttached = true,
+            DetectionEvidence = "UNVERIFIED_JAVA"
+        };
+        Candidate secondWithoutCandidate = new Candidate();
+        PreserveCandidateEvidence(secondWithoutCandidate, firstUnverified);
+        AssignDiscoveryStates(secondWithoutCandidate);
+        bool candidateNeverMisreportedMissing =
+            secondWithoutCandidate.IdentityState == "KHANZA_UNVERIFIED" &&
+            secondWithoutCandidate.DetectionEvidence == "UNVERIFIED_JAVA";
         ClearPendingIdentity();
         return quantity && careCandidate.CareSetting == "RALAN" &&
             detailCareCandidate.CareSetting == "RALAN" && bound && mismatchRejected &&
             ambiguousCareCandidate.CareSettingAmbiguous && hiddenCompoundIgnored &&
-            decoratedIdentity && earlyStopSafe && ambiguousNotStopped && rowOrderStable && OverlaySelfTest();
+            decoratedIdentity && earlyStopSafe && ambiguousNotStopped && rowOrderStable &&
+            khanzaJavaDetected && khanzaJavawDetected && khanzaEqualsArgumentDetected &&
+            khanzaQuotedEqualsArgumentDetected && khanzaProductPrefixedDetected && khanzaPathArgumentDetected && otherJavaRejected && signatureAccepted &&
+            signatureRejected && discoveryStates && candidateNeverMisreportedMissing && OverlaySelfTest();
     }
 
     private static string ExtractSinglePrescriptionId(string value)
@@ -875,7 +1379,14 @@ internal static partial class KhanzaBridge
             { "care_setting", candidate.CareSetting },
             { "scan_ms", candidate.ScanMilliseconds },
             { "nodes_read", candidate.NodesRead },
-            { "visible_java_windows", candidate.VisibleJavaWindows }
+            { "visible_java_windows", candidate.VisibleJavaWindows },
+            { "target_khanza_found", candidate.TargetKhanzaFound },
+            { "target_khanza_pid", candidate.TargetKhanzaProcessId },
+            { "detection_evidence", candidate.DetectionEvidence },
+            { "jab_attached", candidate.JabAttached },
+            { "identity_state", candidate.IdentityState },
+            { "prescription_state", candidate.PrescriptionState },
+            { "discovery_probe", DiscoveryProbePayload(candidate.PrimaryDiscoveryProbe) }
         });
     }
 
@@ -950,21 +1461,104 @@ internal static partial class KhanzaBridge
         Release(vm, table.context); Release(vm, table.table);
     }
 
+    private static KhanzaRuntimeProbe FindKhanzaRuntime()
+    {
+        KhanzaRuntimeProbe result = new KhanzaRuntimeProbe();
+        WindowCallback callback = delegate(IntPtr window, IntPtr state)
+        {
+            if (!IsWindowVisible(window)) return true;
+            uint pid;
+            GetWindowThreadProcessId(window, out pid);
+            string processName;
+            try
+            {
+                using (Process process = Process.GetProcessById((int)pid))
+                    processName = process.ProcessName;
+            }
+            catch { return true; }
+            if (!String.Equals(processName, "java", StringComparison.OrdinalIgnoreCase) &&
+                !String.Equals(processName, "javaw", StringComparison.OrdinalIgnoreCase)) return true;
+            CommandLineEvidence commandLine = ReadProcessCommandLine((int)pid);
+            if (!IsKhanzaJavaProcess(processName, commandLine.Value)) return true;
+            uint sessionId;
+            ProcessIdToSessionId(pid, out sessionId);
+            result.Found = true;
+            result.ProcessId = (int)pid;
+            result.SessionId = sessionId;
+            result.Architecture = GetProcessArchitecture((int)pid);
+            result.ExecutablePath = GetProcessExecutablePath((int)pid);
+            result.CommandLineMethod = commandLine.Method;
+            result.CommandLineQuerySucceeded = commandLine.QuerySucceeded;
+            result.KhanzaJarMatched = true;
+            return false;
+        };
+        EnumWindows(callback, IntPtr.Zero);
+        GC.KeepAlive(callback);
+        return result;
+    }
+
+    private static string GetProcessArchitecture(int processId)
+    {
+        IntPtr process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (process == IntPtr.Zero) return "unknown";
+        try
+        {
+            try
+            {
+                ushort processMachine, nativeMachine;
+                if (IsWow64Process2(process, out processMachine, out nativeMachine))
+                {
+                    if (processMachine == ImageFileMachineI386) return "x86";
+                    if (processMachine == ImageFileMachineAmd64) return "x64";
+                    if (processMachine == ImageFileMachineUnknown)
+                        return nativeMachine == ImageFileMachineAmd64 ? "x64" : "x86";
+                }
+            }
+            catch (EntryPointNotFoundException) { }
+            bool wow64;
+            if (IsWow64Process(process, out wow64))
+                return wow64 ? "x86" : (Environment.Is64BitOperatingSystem ? "x64" : "x86");
+            return "unknown";
+        }
+        finally { CloseHandle(process); }
+    }
+
+    private static string GetProcessExecutablePath(int processId)
+    {
+        IntPtr process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (process == IntPtr.Zero) return "";
+        try
+        {
+            StringBuilder path = new StringBuilder(32768);
+            int length = path.Capacity;
+            return QueryFullProcessImageName(process, 0, path, ref length) ? path.ToString() : "";
+        }
+        finally { CloseHandle(process); }
+    }
+
     private static string FindBridgeDll()
     {
         List<string> candidates = new List<string>();
         string configured = Environment.GetEnvironmentVariable("EMSS_KHANZA_JAB_DLL") ?? "";
         if (configured.Length > 0) candidates.Add(configured);
+        KhanzaRuntimeProbe runtime = FindKhanzaRuntime();
+        if (runtime.Found && runtime.ExecutablePath.Length > 0)
+            candidates.Add(Path.Combine(Path.GetDirectoryName(runtime.ExecutablePath), Dll));
         string javaHome = Environment.GetEnvironmentVariable("JAVA_HOME") ?? "";
-        if (javaHome.Length > 0) candidates.Add(Path.Combine(javaHome, "bin", "windowsaccessbridge-32.dll"));
+        if (javaHome.Length > 0) candidates.Add(Path.Combine(javaHome, "bin", Dll));
+#if BRIDGE_X64
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string bell = Path.Combine(programFiles, "BellSoft");
+#else
         string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
         string bell = Path.Combine(programFilesX86, "BellSoft");
+#endif
         if (Directory.Exists(bell))
         {
             try
             {
-                foreach (string directory in Directory.GetDirectories(bell, "*32*"))
-                    candidates.Add(Path.Combine(directory, "bin", "windowsaccessbridge-32.dll"));
+                foreach (string directory in Directory.GetDirectories(bell, "*"))
+                    candidates.Add(Path.Combine(directory, "bin", Dll));
             }
             catch (UnauthorizedAccessException) { }
         }
@@ -972,9 +1566,22 @@ internal static partial class KhanzaBridge
         return "";
     }
 
-    private static void EmitStatus(string state, string reason)
+    private static void EmitStatus(string state, string reason, Candidate candidate = null)
     {
-        Emit(new Dictionary<string, object> { { "type", "status" }, { "state", state }, { "reason", reason } });
+        Dictionary<string, object> message = new Dictionary<string, object> {
+            { "type", "status" }, { "state", state }, { "reason", reason }
+        };
+        if (candidate != null)
+        {
+            message["target_khanza_found"] = candidate.TargetKhanzaFound;
+            message["target_khanza_pid"] = candidate.TargetKhanzaProcessId;
+            message["detection_evidence"] = candidate.DetectionEvidence;
+            message["jab_attached"] = candidate.JabAttached;
+            message["identity_state"] = candidate.IdentityState;
+            message["prescription_state"] = candidate.PrescriptionState;
+            message["discovery_probe"] = DiscoveryProbePayload(candidate.PrimaryDiscoveryProbe);
+        }
+        Emit(message);
     }
 
     private static void Emit(object value)

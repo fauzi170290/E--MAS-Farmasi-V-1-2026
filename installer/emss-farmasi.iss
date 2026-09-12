@@ -1,5 +1,5 @@
 #define MyAppName "E-MAS Farmasi"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.19"
 #define MyAppPublisher "Tim E-MAS Farmasi"
 #define MyAppExeName "E-MAS Farmasi.exe"
 #ifndef AppDistDir
@@ -11,7 +11,7 @@ AppId={{A532C224-9E26-4A08-90B6-84D7A9BB40B5}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\eMSS Farmasi RS
+DefaultDirName={autopf}\E-MAS Farmasi
 DefaultGroupName={#MyAppName}
 UsePreviousGroup=no
 DisableProgramGroupPage=yes
@@ -67,14 +67,23 @@ const
 
 function CanLaunchApplication: Boolean;
 begin
-  Result := True;
+  Result := FileExists(ExpandConstant('{app}\{#MyAppExeName}'));
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   IcuPath, BackupPath: String;
+  ResultCode: Integer;
 begin
   Result := '';
+  { The Desktop/JAB bridge is exclusively an E-MAS helper. Stop old instances
+    before the binary is replaced so upgrade cannot leave an old bridge alive. }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM "KhanzaBridge.exe"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM "KhanzaBridge-x86.exe"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM "KhanzaBridge-x64.exe"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   IcuPath := ExpandConstant('{app}\icuuc.dll');
   BackupPath := IcuPath + '.quarantined-0.31.0';
   if not FileExists(IcuPath) then Exit;

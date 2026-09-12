@@ -1,4 +1,5 @@
 environment = "production"
+require_deployment_authorization = false
 app_name = "E-MAS Farmasi"
 data_dir = "C:/ProgramData/eMSSFarmasi"
 database_filename = "emss.db"
@@ -13,12 +14,14 @@ tray_enabled = true
 minimize_to_tray = true
 single_instance = true
 backup_daily_enabled = true
-backup_retention_days = 30
-backup_retention_count = 30
-khanza_adapter = "disabled"
-khanza_polling_enabled = false
-# Tidak mengaktifkan monitoring tanpa keputusan dan konfigurasi sah oleh IT.
-khanza_internal_polling_consent = false
+backup_retention_days = 7
+backup_retention_count = 7
+khanza_adapter = "desktop"
+# Installer baru memulai Desktop/JAB sebagai sumber resep default. Upgrade tidak
+# menimpa config.toml yang sudah menyimpan commissioning workstation existing.
+khanza_desktop_overlay_poc = true
+khanza_polling_enabled = true
+khanza_internal_polling_consent = true
 khanza_recent_days = 2
 khanza_monitor_batch_size = 30
 khanza_poll_interval_seconds = 1

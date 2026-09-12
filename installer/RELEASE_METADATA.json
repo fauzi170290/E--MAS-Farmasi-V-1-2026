@@ -1,0 +1,27 @@
+{
+  "format": "EMSS_RELEASE_METADATA_V1",
+  "application_version": "1.0.19",
+  "release_date": "2026-09-12",
+  "schema_revision": "0031_commissioning_source",
+  "distribution": "Windows x64 PyInstaller ONEDIR + Inno Setup 6",
+  "persistent_data": "%ProgramData%\\eMSSFarmasi",
+  "clinical_compatibility": {
+    "prescription_source": "Desktop/JAB primary; MySQL fallback remains XOR-guarded",
+    "knowledge_base": "Application upgrade never changes the Published KB or DRAFT lifecycle",
+    "commissioning": "Fresh install uses Admin-led RALAN/RANAP and source onboarding; existing valid RALAN/RANAP and MySQL/Desktop source are preserved"
+  },
+  "security": "No credentials, passwords, secrets, or patient data are included in the installer.",
+  "khanza_bridge": {
+    "selector": "KhanzaBridge.exe",
+    "binaries": {
+      "x86": "KhanzaBridge-x86.exe",
+      "x64": "KhanzaBridge-x64.exe"
+    },
+    "selection": "Automatic from the verified Khanza JVM architecture",
+    "jab_libraries": {
+      "x86": "windowsaccessbridge-32.dll",
+      "x64": "windowsaccessbridge-64.dll"
+    },
+    "upgrade_behavior": "Existing E-MAS KhanzaBridge helper processes are stopped before all bundled bridge binaries are replaced; only the selected persistent bridge is started."
+  }
+}
