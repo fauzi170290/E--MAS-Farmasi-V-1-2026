@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runbook Diagnosa Khanza / JAB / E-MAS</title>
+  <style>
+    :root { --ink:#18324b; --muted:#53687a; --line:#d9e3eb; --bg:#f5f8fb; --card:#fff; --blue:#1265a8; --green:#157347; --amber:#946200; --red:#a53030; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:15px/1.55 "Segoe UI", Arial, sans-serif; color:var(--ink); background:var(--bg); }
+    main { max-width:1000px; margin:0 auto; padding:28px 20px 54px; }
+    h1 { margin:0 0 4px; font-size:28px; }
+    h2 { margin:34px 0 10px; padding-bottom:7px; border-bottom:1px solid var(--line); font-size:20px; }
+    h3 { margin:18px 0 6px; font-size:16px; }
+    p, li { color:#263d50; }
+    .sub { margin:0; color:var(--muted); }
+    .notice { margin-top:22px; padding:14px 16px; border-left:5px solid var(--amber); border-radius:6px; background:#fff8dc; }
+    .success { border-left-color:var(--green); background:#eefaf3; }
+    .danger { border-left-color:var(--red); background:#fff0f0; }
+    .flow { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0; }
+    .flow span { padding:5px 10px; border-radius:999px; background:#e8f0f7; font-size:13px; font-weight:600; }
+    .command { position:relative; margin:10px 0 16px; border:1px solid #293e50; border-radius:8px; overflow:hidden; background:#122331; }
+    .command-head { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:#1b364a; color:#dceaf5; font-size:13px; }
+    button { border:0; border-radius:5px; padding:6px 11px; cursor:pointer; background:#e6f1fb; color:#124d7d; font-weight:700; }
+    button:hover { background:#cfe7fa; }
+    pre { margin:0; padding:15px; overflow:auto; color:#ecf5fb; font:13px/1.5 Consolas, "Cascadia Code", monospace; white-space:pre; }
+    code { font-family:Consolas, "Cascadia Code", monospace; }
+    .tag { display:inline-block; padding:2px 7px; border-radius:4px; font-size:12px; font-weight:700; background:#e8f0f7; color:#24516f; }
+    .tag.change { background:#fff0d0; color:#765000; }
+    .tag.read { background:#e8f6ee; color:#17613b; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; background:var(--card); }
+    th, td { padding:10px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#edf4f9; }
+    .small { color:var(--muted); font-size:13px; }
+    #toast { position:fixed; right:18px; bottom:18px; padding:11px 15px; border-radius:7px; color:#fff; background:#176b43; box-shadow:0 4px 14px #0003; opacity:0; transform:translateY(10px); transition:.2s; pointer-events:none; }
+    #toast.show { opacity:1; transform:translateY(0); }
+    @media print { body { background:#fff; } main { max-width:none; padding:10px; } button,#toast { display:none; } .command { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Runbook Diagnosa Khanza / JAB / E-MAS</h1>
+  <p class="sub">PowerShell · Khanza Desktop/JAB · versi panduan client</p>
+
+  <div class="notice">
+    Jalankan PowerShell normal sebagai <strong>user Windows yang menjalankan Khanza</strong> (contoh: <code>FARMASI\rsuso</code>).<br>
+    Ikuti urutan A → B → C → D. Jangan menjalankan semua query sekaligus.
+  </div>
+
+  <div class="flow"><span>A. Cek runtime</span><span>B. Aktifkan JAB bila perlu</span><span>C. Verifikasi</span><span>D. Diagnosa resep</span><span>E. Popup</span><span>F. Kecepatan</span><span>G. Config</span><span>H. Audio</span></div>
+
+  <h2>A. Cek cepat saat Khanza terbuka</h2>
+  <p><span class="tag read">BACA-SAJA</span> Fungsi: menemukan Java Khanza yang benar, pemilik proses, path runtime, dan status Java Access Bridge (JAB).</p>
+  <div class="command"><div class="command-head"><span>A1 — Status Khanza dan JAB</span><button data-copy="a1">Salin</button></div><pre id="a1">$khanza = Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.Name -in 'java.exe','javaw.exe' -and
+    $_.CommandLine -match '(?i)khanza\.jar'
+  } |
+  Select-Object -First 1
+
+if (-not $khanza) {
+  Write-Host 'KHANZA_TIDAK_DITEMUKAN. Buka Khanza dahulu.'
+  return
+}
+
+$javaHome = Split-Path (Split-Path $khanza.ExecutablePath -Parent) -Parent
+$jabSwitch = Join-Path $javaHome 'bin\jabswitch.exe'
+$jabConfig = Join-Path $env:USERPROFILE '.accessibility.properties'
+$owner = Invoke-CimMethod -InputObject $khanza -MethodName GetOwner
+$jabEnabled = Test-Path $jabConfig -and (
+  Get-Content $jabConfig -ErrorAction SilentlyContinue |
+    Select-String -Pattern '^\s*assistive_technologies\s*=\s*.*AccessBridge' -Quiet
+)
+
+[PSCustomObject]@{
+  Khanza_PID         = $khanza.ProcessId
+  Java_Runtime       = $javaHome
+  Java_Executable    = $khanza.ExecutablePath
+  Khanza_Owner       = "$($owner.Domain)\$($owner.User)"
+  PowerShell_User    = "$env:USERDOMAIN\$env:USERNAME"
+  Jabswitch_Ada      = Test-Path $jabSwitch
+  JAB_Aktif          = $jabEnabled
+  Konfigurasi_JAB    = $jabConfig
+  CommandLine        = $khanza.CommandLine
+} | Format-List</pre></div>
+  <table><tr><th>Hasil</th><th>Makna / tindakan berikutnya</th></tr>
+    <tr><td><code>JAB_Aktif : True</code></td><td>Lanjut ke C atau D. Jangan menjalankan enable lagi.</td></tr>
+    <tr><td><code>JAB_Aktif : False</code></td><td>Lanjut ke B.</td></tr>
+    <tr><td><code>Jabswitch_Ada : False</code></td><td>Jangan salin DLL dari Java lain. Runtime Liberica yang dipakai Khanza perlu repair/install oleh IT.</td></tr>
+    <tr><td><code>KHANZA_TIDAK_DITEMUKAN</code></td><td>Buka Khanza dahulu, lalu ulangi. Jika masih gagal, gunakan A2.</td></tr>
+  </table>
+  <div class="command"><div class="command-head"><span>A2 — Daftar proses Java bila Khanza tidak ditemukan</span><button data-copy="a2">Salin</button></div><pre id="a2">Get-CimInstance Win32_Process |
+  Where-Object { $_.Name -in 'java.exe','javaw.exe' } |
+  Select-Object ProcessId, ExecutablePath, CommandLine</pre></div>
+
+  <h2>B. Aktifkan JAB bila memang belum aktif</h2>
+  <p><span class="tag change">MENGUBAH KONFIGURASI PER-USER</span> Fungsi: membuat konfigurasi agar JVM Khanza memuat Java Access Bridge saat mulai ulang. Ini tidak mengubah resep, database, source E‑MAS, atau installer.</p>
+  <div class="notice danger"><strong>Jangan paksa tutup melalui PowerShell.</strong> Tutup Khanza manual terlebih dahulu agar data operator tidak hilang.</div>
+  <h3>B1. Pastikan Khanza sudah ditutup</h3>
+  <div class="command"><div class="command-head"><span>B1 — Konfirmasi proses Khanza sudah berhenti</span><button data-copy="b1">Salin</button></div><pre id="b1">Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.Name -in 'java.exe','javaw.exe' -and
+    $_.CommandLine -match '(?i)khanza\.jar'
+  } |
+  Select-Object ProcessId, ExecutablePath, CommandLine</pre></div>
+  <p>Output harus kosong. Bila masih ada PID, kembali ke Khanza dan tutup manual.</p>
+  <h3>B2. Aktifkan untuk runtime x86 client yang sudah terverifikasi</h3>
+  <div class="command"><div class="command-head"><span>B2 — Enable JAB Liberica 12 x86</span><button data-copy="b2">Salin</button></div><pre id="b2">$javaHome = 'C:\Program Files (x86)\BellSoft\LibericaJDK-12-32'
+&amp; "$javaHome\bin\jabswitch.exe" -enable</pre></div>
+  <h3>B3. Verifikasi hasil enable</h3>
+  <div class="command"><div class="command-head"><span>B3 — Konfirmasi AccessBridge pada profil user</span><button data-copy="b3">Salin</button></div><pre id="b3">$jabConfig = Join-Path $env:USERPROFILE '.accessibility.properties'
+Get-Content $jabConfig -ErrorAction Stop |
+  Select-String -Pattern 'assistive_technologies|AccessBridge'</pre></div>
+  <p>Output yang diharapkan: <code>assistive_technologies=com.sun.java.accessibility.AccessBridge</code>. Setelah itu buka ulang Khanza dan E‑MAS.</p>
+  <p class="small">Jika file tidak ada atau output kosong: pastikan <code>Khanza_Owner</code> dan <code>PowerShell_User</code> pada A1 adalah user yang sama. <code>jabswitch</code> menyimpan konfigurasi per-user.</p>
+
+  <h2>C. Verifikasi sesudah Khanza dibuka ulang</h2>
+  <p><span class="tag read">BACA-SAJA</span> Fungsi: melihat window Khanza aktif dan modul yang terbaca. Daftar modul kosong tidak otomatis berarti gagal; bukti utama adalah E‑MAS dapat membaca resep.</p>
+  <div class="command"><div class="command-head"><span>C1 — Window dan modul Khanza</span><button data-copy="c1">Salin</button></div><pre id="c1">$khanza = Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.Name -in 'java.exe','javaw.exe' -and
+    $_.CommandLine -match '(?i)khanza\.jar'
+  } |
+  Select-Object -First 1
+
+Get-Process -Id $khanza.ProcessId |
+  Select-Object Id, ProcessName, SessionId, MainWindowHandle, MainWindowTitle, Responding, Path
+
+Get-Process -Id $khanza.ProcessId -Module |
+  Where-Object {
+    $_.ModuleName -match '(?i)AccessBridge' -or
+    $_.FileName -match '(?i)AccessBridge'
+  } |
+  Select-Object ModuleName, FileName</pre></div>
+
+  <h2>D. Khanza terhubung, tetapi resep tidak masuk antrean / popup</h2>
+  <div class="notice success"><strong>Makna penting:</strong> jika E‑MAS menunjukkan <code>PRESCRIPTION_VIEW_NOT_FOUND</code>, <code>Tabel Obat: Belum terbaca</code>, dan <code>Jumlah Obat: 0</code>, maka masalah terjadi sebelum antrean/popup/audio. E‑MAS sengaja fail-safe agar tidak memakai data pasien sebelumnya.</div>
+  <p>Setelah gagal, jangan pindah pasien lagi. Jalankan query ini.</p>
+  <div class="command"><div class="command-head"><span>D1 — Reason-code snapshot JAB terbaru</span><button data-copy="d1">Salin</button></div><pre id="d1">$log = 'C:\ProgramData\eMSSFarmasi\Logs\emss.log'
+
+Get-Content $log -Tail 300 -ErrorAction Stop |
+  Select-String -Pattern 'DESKTOP_SNAPSHOT=INCOMPLETE|DESKTOP_SNAPSHOT=STABLE|DESKTOP_BRIDGE_STATE|BRIDGE_MESSAGE_QUEUE_FULL'</pre></div>
+  <table><tr><th>Reason</th><th>Arti</th></tr>
+    <tr><td><code>DETAIL_NOT_DETECTED</code></td><td>Variasi tampilan/detail resep Khanza belum dikenali.</td></tr>
+    <tr><td><code>DETAIL_CARE_ID_NOT_READABLE</code></td><td>No. Rawat pada detail tidak terbaca.</td></tr>
+    <tr><td><code>QUEUE_IDENTITY_NOT_BOUND</code></td><td>Antrean dan detail belum dapat dipastikan resep yang sama.</td></tr>
+    <tr><td><code>NO_COMMITTED_ITEMS</code></td><td>Tabel ditemukan, namun obat/jumlah belum valid atau belum final.</td></tr>
+    <tr><td><code>CARE_SETTING_NOT_DETECTED</code></td><td>Ralan/Ranap belum dapat ditentukan.</td></tr>
+    <tr><td><code>PATIENT_IDENTITY_AMBIGUOUS</code></td><td>Lebih dari satu identitas terbaca; E‑MAS berhenti demi keselamatan pasien.</td></tr>
+  </table>
+  <p>Untuk analisis lanjutan, kirim hasil D1 + <strong>Salin Diagnosa</strong> E‑MAS + screenshot tabel obat Khanza yang sudah diburamkan (nama pasien, RM, No. Rawat, No. Resep).</p>
+
+  <h2>E. Overlay muncul, tetapi popup tidak</h2>
+  <p>Tes manual, tanpa query:</p>
+  <ol>
+    <li>Buka resep baru dan tetap di layar resep itu selama 20 detik.</li>
+    <li>Catat kapan overlay muncul dan kapan popup muncul.</li>
+    <li>Buka ulang resep yang sama tanpa perubahan.</li>
+  </ol>
+  <p>Normal bila resep yang sama hanya memperbarui overlay tanpa mengulang popup/audio; E‑MAS mencegah duplikasi berdasarkan fingerprint. Jika resep baru tetap tidak masuk antrean setelah 20 detik, jalankan D1.</p>
+
+  <h2>F. Cek kecepatan pembacaan</h2>
+  <p><span class="tag read">BACA-SAJA</span> Fungsi: membedakan lambat pada JAB dari lambat pada antrean/popup.</p>
+  <div class="command"><div class="command-head"><span>F1 — Timing snapshot JAB</span><button data-copy="f1">Salin</button></div><pre id="f1">$log = 'C:\ProgramData\eMSSFarmasi\Logs\emss.log'
+
+Get-Content $log -Tail 500 -ErrorAction Stop |
+  Select-String -Pattern 'DESKTOP_SNAPSHOT=STABLE|DESKTOP_SNAPSHOT=INCOMPLETE' |
+  Select-Object -Last 20</pre></div>
+  <ul>
+    <li><code>JAB_PAIR_MS</code> tinggi: pembacaan accessibility tree Khanza yang lambat.</li>
+    <li><code>NODES</code> tinggi: tampilan Khanza lebih kompleks.</li>
+    <li>Snapshot stabil cepat, popup terlambat: periksa antrean popup/deduplikasi, bukan JAB.</li>
+  </ul>
+  <div class="notice">Jangan mengubah stabilisasi agar cepat. Dua pembacaan JAB identik adalah pelindung agar alert tidak tertukar ke resep/pasien sebelumnya.</div>
+
+  <h2>G. Cek konfigurasi E‑MAS</h2>
+  <p><span class="tag read">BACA-SAJA</span> Fungsi: melihat setting client tanpa mengubahnya.</p>
+  <div class="command"><div class="command-head"><span>G1 — Setting Desktop/JAB</span><button data-copy="g1">Salin</button></div><pre id="g1">$config = 'C:\ProgramData\eMSSFarmasi\config.toml'
+
+Get-Content $config -ErrorAction Stop |
+  Select-String -Pattern 'khanza_adapter|khanza_poll_interval_seconds|khanza_desktop_overlay_poc|khanza_stability'</pre></div>
+  <p>Nilai normal: <code>khanza_adapter = "desktop"</code>, <code>khanza_desktop_overlay_poc = true</code>, dan <code>khanza_poll_interval_seconds = 1</code>.</p>
+
+  <h2>H. Popup muncul, tetapi audio tidak terdengar</h2>
+  <p><span class="tag read">BACA-SAJA</span> Audio tidak memblokir pembacaan resep atau popup. Ini diagnosis terpisah.</p>
+  <div class="command"><div class="command-head"><span>H1 — Perangkat audio Windows</span><button data-copy="h1">Salin</button></div><pre id="h1">Get-CimInstance Win32_SoundDevice |
+  Select-Object Name, Status, Manufacturer</pre></div>
+  <p>Lalu di E‑MAS buka <strong>Suara Peringatan</strong>: periksa volume aplikasi dan file audio. Jangan menganggap audio sebagai penyebab resep tidak terbaca.</p>
+
+  <h2>Urutan diagnosis aman</h2>
+  <p><strong>Khanza ditemukan → JAB aktif → snapshot resep stabil → antrean → popup → audio.</strong></p>
+  <p class="small">Panduan ini tidak mengubah source E‑MAS, bridge, database, KB DDI, atau installer.</p>
+</main>
+<div id="toast">Query disalin ke clipboard.</div>
+<script>
+  const toast = document.getElementById('toast');
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    const area = document.createElement('textarea');
+    area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';
+    document.body.appendChild(area); area.focus(); area.select();
+    try { document.execCommand('copy'); } finally { document.body.removeChild(area); }
+    return Promise.resolve();
+  }
+  document.querySelectorAll('[data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const text = document.getElementById(button.dataset.copy).textContent;
+      try { await copyText(text); toast.textContent = 'Query disalin ke clipboard.'; }
+      catch { toast.textContent = 'Gagal menyalin. Blok teks lalu Ctrl+C.'; }
+      toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2200);
+    });
+  });
+</script>
+</body>
+</html>
