@@ -146,3 +146,39 @@ Status: E1 dan E2 SELESAI DI SOURCE setelah rilis 0.34.2. Design tokens desktop,
 - [DDI lintas resep pasien yang sama](BACKLOG_DDI_LINTAS_RESEP_20260831.md).
 
 Rekomendasi model/effort adalah penilaian per batch menggunakan keluarga model yang sudah dibahas; bukan penggantian model otomatis. Belum ada mockup baru, perubahan aplikasi atau build installer pada pencatatan ini.
+
+## 5. Tambahan wajib — keterbacaan Mode Farmasi dan label Export Dashboard
+
+Tanggal pencatatan: 15 September 2026.  
+Status: **DICATAT ATAS BUKTI PENGGUNA; JANGAN DIEKSEKUSI SEBELUM ADA INSTRUKSI PERBAIKAN.**
+
+### Bukti dan gejala
+
+- Pada Mode Farmasi Rawat Jalan, saat halaman Koneksi Khanza dibuka, panel
+  `Integrasi SIMRS Khanza — READ ONLY` dapat memakai latar hampir hitam dengan
+  teks status biru gelap. Informasi kesiapan bridge/JAB, diagnosis, dan status
+  pembacaan resep menjadi sangat sulit dibaca, meskipun status koneksi sendiri
+  menunjukkan **Terhubung ke Khanza**. Screenshot pengguna 15 September 2026
+  menjadi bukti visual; ini bukan bukti bahwa koneksi, JAB, atau mesin skrining
+  gagal.
+- Pada menu Dashboard, tulisan pada tombol **Export** tidak terlihat. Lokasi,
+  warna teks, state disabled/enabled, dan tema Windows yang memicu belum
+  direproduksi; jangan mengasumsikan ekspor gagal atau tombol tidak berfungsi.
+
+### Ruang lingkup perbaikan yang wajib ikut pada perubahan berikutnya
+
+1. Pastikan panel Koneksi Khanza pada Mode Farmasi memakai kombinasi latar,
+   teks primer/sekunder, status, dan scroll area dengan kontras terbaca pada
+   tema terang/gelap serta skala Windows 100%, 125%, dan 150%.
+2. Pastikan label tombol Export Dashboard terlihat pada semua state yang sah
+   (normal, hover, fokus, disabled), tanpa menyamarkan status disabled.
+3. Pertahankan seluruh isi diagnostik, reason-code, status READ ONLY, RBAC,
+   adapter, JAB, polling, dashboard query, dan mekanisme ekspor. Ini adalah
+   perbaikan presentasi/aksesibilitas; jangan mengubah logika klinis atau data.
+4. Tambahkan regresi visual/UI yang secara eksplisit memeriksa warna/kontras
+   dan teks tombol, lalu UAT pada Mode Farmasi dengan Koneksi Khanza terbuka
+   dan Dashboard. Jangan mengklaim lulus hanya karena tidak ada crash.
+
+Klasifikasi awal: **LIGHT**, patch stylesheet/widget terlokalisasi. Bila
+inspeksi menunjukkan palette atau stylesheet global yang memengaruhi layar lain,
+pisahkan menjadi perubahan MEDIUM dan jangan memperluas tanpa bukti.

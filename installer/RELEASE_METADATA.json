@@ -1,8 +1,8 @@
 {
   "format": "EMSS_RELEASE_METADATA_V1",
-  "application_version": "1.0.19",
-  "release_date": "2026-09-12",
-  "schema_revision": "0031_commissioning_source",
+  "application_version": "1.0.21",
+  "release_date": "2026-09-14",
+  "schema_revision": "0032_ddi_clinical_presentation_metadata",
   "distribution": "Windows x64 PyInstaller ONEDIR + Inno Setup 6",
   "persistent_data": "%ProgramData%\\eMSSFarmasi",
   "clinical_compatibility": {

@@ -2,7 +2,8 @@
 
 ## Kondisi awal
 
-Versi `DDI-KHANZA-v1.0.0` telah dimuat sebagai `DRAFT`. Seluruh rule inactive.
+Versi `EMAS-DDI-MEDSCAPE-v1.0.0` dimuat sebagai `DRAFT`. Seluruh rule inactive
+hingga aktivasi eksplisit Super Admin/KFT; master final tidak memiliki pair HOLD.
 Mapping obat juga masih menunggu review. Kondisi ini disengaja agar tidak ada
 keputusan klinis yang aktif tanpa persetujuan.
 
@@ -17,7 +18,7 @@ keputusan klinis yang aktif tanpa persetujuan.
 ## Meninjau master DDI
 
 1. Buka **Knowledge Base & Master DDI**.
-2. Pilih `DDI-KHANZA-v1.0.0`.
+2. Pilih `EMAS-DDI-MEDSCAPE-v1.0.0`.
 3. Gunakan pencarian berdasarkan pasangan, efek klinis, atau sumber.
 4. Pilih filter **HOLD belum selesai** agar rule lain tidak bercampur dalam
    antrean review.
