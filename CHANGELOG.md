@@ -1,5 +1,244 @@
 # Changelog
 
+## 1.0.21 - 2026-09-14
+
+### Final PUBLISHED DDI runtime master
+- Ganti bundle runtime menjadi `EMAS-DDI-MEDSCAPE-v1.0.0`: 5.410 pair
+  final (667 DDI positif, 3.416 verified no-interaction, 1.077
+  not-assessable, 250 excluded) dan 0 pair HOLD.
+- Pertahankan kode/nama/mapping obat Khanza existing; pencocokan workbook
+  memakai kesamaan nama exact-normalized dan tidak melakukan fuzzy remap.
+- Aktivasi tetap eksplisit oleh Super Admin/KFT; versi PUBLISHED lama
+  diretire secara auditabel hanya pada tindakan aktivasi admin.
+- Popup memakai effect, mechanism, display action, recommendation, interaction
+  summary, detail level, dan kode Khanza dari snapshot terstruktur tanpa
+  membuat clinical free-text baru.
+
+### Kesiapan Khanza diagnosis and read performance
+- Lengkapi diagnosis Kesiapan Khanza untuk command line yang tidak dapat
+  dibaca, mismatch arsitektur bridge, JAB attach, jendela/tabel resep, dan
+  seluruh hasil aktivasi JAB. Diagnosa yang disalin tetap tanpa data pasien,
+  nomor rekam medis, nomor resep, kredensial, atau command line penuh.
+- Tombol aktivasi kini mensyaratkan executable Java Khanza dan
+  `jabswitch.exe` yang benar-benar terverifikasi. Kegagalan access denied,
+  return code, dan verifikasi konfigurasi dilaporkan secara spesifik.
+- Tampilan readiness melaporkan waktu baca JAB dan status lambat pada atau di
+  atas ambang 1.500 ms yang sama dengan batas baca native, tanpa mengubah
+  scanner, fingerprint, atau stabilitas snapshot.
+
+## 1.0.20 - 2026-09-14
+
+### Khanza readiness handoff
+- Mode Farmasi sekarang membuka halaman **Kesiapan Khanza** pada sumber
+  Desktop/JAB. Halaman menjalankan probe runtime Java Khanza secara read-only
+  di latar belakang, termasuk `khanza.jar` dan `simrsKhanza.jar`, arsitektur,
+  sesi Windows, dan `jabswitch.exe`.
+- Tampilkan tindakan tunggal **Aktifkan Java Access Bridge untuk User Ini**
+  hanya ketika runtime Khanza dan `jabswitch.exe` yang sesuai telah ditemukan.
+  Aktivasi tetap meminta konfirmasi pengguna, lalu meminta Khanza ditutup dan
+  dibuka ulang; E-MAS tidak menutup atau restart Khanza.
+- Tambahkan reason-code ringkas dan **Salin Diagnosa** tanpa data pasien saat
+  runtime tidak ditemukan, probe gagal, atau `jabswitch.exe` tidak tersedia.
+
+## Prior source deltas included
+
+### Client Readiness & Java Access Bridge remediation — pending next build
+- Koneksi Khanza membaca path runtime Java aktual dari probe Khanza, sehingga
+  kesiapan JAB tidak lagi mengasumsikan lokasi atau arsitektur Liberica tertentu.
+- Tambah status kesiapan JAB untuk profil Windows aktif dan tombol aktivasi
+  eksplisit. Tombol hanya menjalankan `jabswitch -enable` pada runtime Khanza
+  yang terdeteksi, setelah konfirmasi pengguna.
+- Aktivasi tidak pernah otomatis, tidak menutup/restart Khanza, tidak mengubah
+  resep/database/KB, dan selalu meminta pengguna membuka ulang Khanza sebelum
+  uji baca resep.
+- Tambah regression tests untuk path runtime, konfigurasi per-user, dan gagal
+  tertutup bila `jabswitch.exe` tidak tersedia. Installer belum dibangun.
+
+### Clinical DDI alert enrichment — pending next build
+- Tambah metadata presentasi klinis Medscape pada rule KB dan snapshot hasil
+  skrining: ketersediaan detail, aksi, sumber rekomendasi, serta ringkasan.
+- Workbook `MASTER_DDI_FINAL` dapat melalui preview/staging/commit DRAFT KB
+  yang ada; runtime popup hanya membaca snapshot dari rule Published.
+- Perkaya popup dengan urutan severity Medscape, count header, fallback detail
+  generik yang tidak mengarang efek/mekanisme, dan detail lengkap read-only.
+- Delta ini tidak mengubah engine/deteksi/fingerprint/severity DDI maupun audio
+  trigger. Installer tidak dibangun; perubahan menunggu build resmi berikutnya.
+
+### Desktop/JAB stale prescription guard — pending next build
+- Abaikan `JInternalFrame` Khanza yang tidak lagi berstatus `showing` agar
+  tabel obat pasien sebelumnya tidak dapat menggantikan detail yang aktif.
+- Wajibkan identitas resep aktif sebelum bridge menghentikan pencarian detail;
+  detail obat tanpa identitas tetap fail-safe dan tidak diterbitkan.
+- Delta ini masih source-only. Installer 1.0.19 tidak dibangun ulang; build
+  release berikutnya harus mengompilasi ulang bridge x86 dan x64 dari source ini.
+
+## 1.0.19 - 2026-09-12
+
+### Canonical-first reference workflow
+- Ubah input kandungan Master Obat menjadi pencarian canonical ingredient
+  existing yang alfabetis dan mendukung obat kombinasi tanpa fuzzy mapping.
+- Isi otomatis kandungan canonical pada pembuatan pasangan DDI untuk obat
+  tunggal; obat kombinasi tetap membutuhkan pilihan komponen eksplisit.
+- Satukan daftar unresolved dan import hasil review dalam satu menu Pemetaan
+  Obat, serta tambahkan export workbook obat yang perlu dipetakan.
+- Ringkas status Master Obat dan tampilkan penjelasan panjang hanya saat
+  pengguna meminta detail.
+
+### Appearance and navigation
+- Sembunyikan menu Validasi Klinis & UAT dari navigasi operasional tanpa
+  menghapus service, tabel, audit, atau data validasinya.
+- Tambahkan pilihan Mode Terang dan Mode Gelap pada Pengaturan. Preferensi
+  tampilan disimpan per pengguna Windows dan tidak mengubah data klinis.
+- Pertahankan warna semantik status pada mode gelap dengan foreground kontras
+  agar isi tabel tetap terbaca selama penggunaan panjang.
+
+## 1.0.18 - 2026-09-11
+
+### Final production installer candidate
+- Tambahkan Bulk Master Obat Import/Export dengan staging, validasi, review,
+  commit transaksional, dan export laporan Excel.
+- Instalasi baru memakai Desktop/JAB sebagai sumber resep default; konfigurasi
+  commissioning valid pada upgrade tetap dipertahankan.
+
+## 1.0.17 - 2026-09-10
+
+### Overlay otomatis pada Desktop/JAB
+- Commissioning Desktop/JAB kini mengaktifkan monitoring, auto-connect, dan
+  overlay penanda baris sebagai satu konfigurasi workstation.
+- Instalasi yang sudah memiliki commissioning Desktop/JAB juga memuat overlay
+  otomatis setelah upgrade; konfigurasi MySQL tetap tidak menjalankan overlay.
+- Verifikasi kedua urutan startup: Khanza sudah terbuka sebelum E-MAS dan
+  E-MAS menunggu lalu tersambung ketika Khanza dibuka.
+
+## 1.0.16 - 2026-09-10
+
+### Dual KhanzaBridge x86/x64
+- Bundel bridge Java Access Bridge x86 dan x64 dalam satu installer.
+- Pilih bridge otomatis berdasarkan arsitektur JVM Khanza yang telah
+  diverifikasi melalui bukti proses `khanza.jar`.
+- Hentikan bridge lama sebelum pergantian arsitektur atau upgrade sehingga
+  hanya satu listener produksi yang aktif.
+- Tambahkan diagnostik arsitektur Java/bridge, sesi Windows target, status
+  kecocokan, dan tombol **Salin Diagnostik Khanza** tanpa data pasien.
+
+## 1.0.15 - 2026-09-10
+
+### Perbaikan discovery Khanza pada workstation client
+- Perluas pencocokan basename `khanza.jar` untuk bentuk launcher Java yang valid, termasuk `-jar=<path>` dan argumen ber-quote.
+- Tetap menolak JAR Java lain, nama file turunan seperti `reporting-khanza.jar`, dan `khanza.jar.bak`.
+- Detail Teknis kini membedakan apakah teks `khanza.jar` tersedia pada command line dan apakah pola identitasnya cocok.
+
+## 1.0.14 - 2026-09-10
+
+### Diagnostik discovery Khanza
+- Menampilkan gate runtime untuk kandidat Java/JAB: PID, metode command-line, hasil khanza.jar, JAB attach, root frame, menu bar, desktop pane, dan signature akhir.
+- Menyimpan reason dan kode Win32 untuk kegagalan command-line tanpa mencatat command line, judul jendela, data pasien, atau isi resep.
+- Status operasional membedakan Khanza belum diverifikasi dari sistem klinis yang siap digunakan.
+## 1.0.13 - 2026-09-10
+
+- Finalisasi discovery Desktop/JAB: verifikasi Khanza kini dapat memakai
+  bukti `khanza.jar` atau signature struktur Java Access Bridge yang stabil.
+- Pisahkan status aplikasi Java belum terverifikasi, kegagalan attach JAB,
+  koneksi Khanza, dan kesiapan tampilan resep tanpa mengubah clinical path.
+
+## 1.0.12 - 2026-09-10
+
+- Tambahkan fallback pembacaan command line proses x86 secara read-only saat
+  kebijakan Windows menolak WMI. Discovery tetap memerlukan bukti
+  `khanza.jar`; proses Java lain tidak dijadikan sumber resep.
+
+## 1.0.11 - 2026-09-10
+
+- Perbaiki discovery SIMRS Khanza berbasis proses `java`/`javaw` dengan bukti
+  command line `khanza.jar`, sehingga judul jendela rumah sakit tidak lagi
+  harus memuat kata “Khanza”.
+- Pisahkan status target Khanza dan JAB attach dari pembacaan tabel resep;
+  Detail Teknis kini menampilkan PID serta bukti deteksi.
+- Bundel KhanzaBridge x86 terbaru dalam installer dan hentikan bridge E-MAS
+  lama secara terkontrol sebelum binary upgrade diganti.
+
+## 1.0.10 - 2026-09-09
+
+- Merapikan header Mode Farmasi, status Khanza, dan layout master-detail Antrean Resep yang dapat diatur ukurannya.
+- Menambahkan alur Backup & Restore berbasis file: buka folder, pilih file lokal, preview tervalidasi, dan panduan restore antar-PC.
+
+## 1.0.9 - 2026-09-09
+
+- Tambahkan Persiapan Awal E-MAS tiga langkah setelah pembuatan Admin Utama:
+  area pelayanan, metode pembacaan resep, dan pemeriksaan sistem.
+- Jadikan Desktop/JAB pilihan fresh install yang direkomendasikan dan langsung
+  aktifkan adapter serta monitoring setelah commissioning selesai.
+- Simpan area RALAN/RANAP dan metode pembacaan resep di database lokal agar
+  startup berikutnya memuat konfigurasi yang sama; upgrade tetap mempertahankan
+  MySQL bila sudah dipilih sebelumnya.
+- Bedakan status konfigurasi, integrasi aktif, serta runtime Khanza. Desktop/JAB
+  yang menunggu Khanza kini tampil MENUNGGU dan melakukan attach/reconnect
+  otomatis tanpa membuat bridge kedua.
+- Perbaiki Compatibility Wizard agar DISABLED tidak lagi disebut sebagai MySQL
+  fallback dan agar Khanza yang belum dibuka tidak dianggap kegagalan integrasi.
+
+## 1.0.8 - 2026-09-08
+
+- Improve the installation preparation table so full status explanations stay
+  visible without horizontal clipping.
+
+## 1.0.7 - 2026-09-08
+
+- Fix the installation compatibility check so it recognizes the bundled
+  `KhanzaBridge.exe` when no explicit bridge path is configured.
+
+## 1.0.6 - 2026-09-08
+
+- Include the Khanza row-overlay package explicitly in the Windows binary.
+- Declare the overlay production opt-in in the installer configuration as
+  disabled by default. Existing UAT-approved workstations retain their
+  persisted explicit opt-in during an upgrade.
+
+## 1.0.5 - 2026-09-08
+
+- Rebuild the Windows package from the current source through schema revision
+  `0030_unmapped_drug_registry`, including the completed Phase 3 services and UI.
+- Use the current product name for fresh-install application directories and
+  create the Desktop shortcut by default so the installed application is easy
+  to find and launch.
+- Verify that the packaged executable exists before offering the post-install
+  launch action; persistent data under ProgramData remains preserved.
+
+- Resolve legacy master duplicates whose canonical Khanza code and ingredient
+  signature agree and whose names differ only in terminal TAB/TABLET spelling.
+  Preserve source rows/history and continue blocking ingredient, name, strength,
+  other-form and approval conflicts. Not included in the existing 1.0.4 installer.
+
+## 1.0.4 - 2026-09-04
+
+- Allow named SUPER_ADMIN users to correct a Master Obat SIMRS code while the
+  backend continues to deny code changes by KFT and other roles.
+- Reject exact or five-digit-equivalent SIMRS code duplicates and explicitly
+  flag candidates whose active-ingredient set conflicts.
+- Preserve existing component mapping rows and stored screening history when a
+  code-only correction succeeds, with the before/after code recorded in audit.
+- Remove critical-risk simulation controls from operational queue/history;
+  synthetic scenarios remain available in the dedicated UAT simulator.
+- Keep queue filters and review actions reachable in non-maximized windows with
+  compact controls and proportional table columns.
+- Default operational notifications no longer require Advisory activation or a
+  production release record. Explicit strict-pilot opt-in and SILENT_PILOT remain;
+  emergency stop, source freshness, access, care scope and KFT controls remain.
+- Bundle the owner's selected MP3 cues for six categories, preserving existing
+  custom audio preferences and resolving missing paths to the shipped defaults.
+- Combine Batch 1–3 with notification/audio changes for installer qualification.
+
+## 1.0.3 - 2026-09-03
+
+- Recognize cryptographically valid historical audit forks created by concurrent
+  writes in older builds without deleting or rewriting audit history.
+- Continue rejecting altered hashes, unknown parents, and additional audit
+  genesis records while current builds serialize local database sessions.
+- Add active/inactive filtering and sortable status management for DDI pairs.
+- Keep all DDI pair actions reachable with a responsive two-column action grid.
+- Show connected Khanza panels in green and disconnected panels in red while
+  retaining explicit text labels for accessibility.
+
 ## 1.0.2 - 2026-09-02
 
 - Serialize local database sessions so background monitoring cannot fork the audit hash chain.
@@ -36,7 +275,11 @@
 - Memulihkan visibilitas katalog bawaan berisi 5.432 pasangan DDI dan mempertahankan hasil review KFT maupun master lokal sebagai data terpisah.
 - Menambahkan gate binary untuk instalasi/upgrade: bundle klinis harus ikut terkemas, ledger lama harus pulih, serta koreksi obat, review klinis, master lokal, konfigurasi, dan preferensi audio harus tetap utuh.
 - Installer tetap mempertahankan database dan konfigurasi di `ProgramData`; katalog serta pemetaan bawaan tetap DRAFT/nonaktif sampai kebijakan aktivasi Batch H3.
-- Tidak memperbarui dua panduan PDF; schema terbaru `0029_kfa_identity`.
+- Tidak memperbarui dua panduan PDF; schema terbaru `0030_unmapped_drug_registry`.
+
+## Unreleased — Phase 2.7 Registry Obat Belum Dipetakan
+
+- Menambahkan migration `0030_unmapped_drug_registry` untuk registry obat Khanza belum dipetakan yang tersimpan di jalur background non-klinis.
 
 ## Unreleased — Batch H0 Fondasi KFA
 

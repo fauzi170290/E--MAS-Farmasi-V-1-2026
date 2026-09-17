@@ -30,14 +30,34 @@ seed_tree = Tree(
     prefix="seed",
     excludes=["__pycache__", "*.pyc"],
 )
-hiddenimports = collect_submodules(
-    "alembic", filter=lambda name: not name.startswith("alembic.testing")
-) + collect_submodules("sqlalchemy.dialects.sqlite") + ["logging.config"]
+bridge_dir = project / "src" / "emss" / "integrations" / "khanza"
+bridge_binaries = tuple(
+    bridge_dir / name
+    for name in (
+        "KhanzaBridge.exe",
+        "KhanzaBridge-x86.exe",
+        "KhanzaBridge-x64.exe",
+    )
+)
+missing_bridges = [path for path in bridge_binaries if not path.is_file()]
+if missing_bridges:
+    raise FileNotFoundError(
+        "Required production bridge is missing: "
+        + ", ".join(str(path) for path in missing_bridges)
+    )
+hiddenimports = (
+    collect_submodules(
+        "alembic", filter=lambda name: not name.startswith("alembic.testing")
+    )
+    + collect_submodules("sqlalchemy.dialects.sqlite")
+    + collect_submodules("emss.overlay")
+    + ["logging.config"]
+)
 
 a = Analysis(
     [str(project / "src" / "emss" / "__main__.py")],
     pathex=[str(project / "src")],
-    binaries=[],
+    binaries=[(str(path), ".") for path in bridge_binaries],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

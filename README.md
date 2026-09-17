@@ -151,7 +151,9 @@ khanza_stability_interval_seconds = 2.0
 khanza_stability_max_attempts = 3
 ```
 
-`KhanzaBridge.exe` sudah berada di paket aplikasi. Jangan mengarahkan
+`KhanzaBridge.exe`, `KhanzaBridge-x86.exe`, dan `KhanzaBridge-x64.exe` sudah
+berada di paket aplikasi. E-MAS memilih bridge yang cocok dengan arsitektur
+JVM Khanza secara otomatis. Jangan mengarahkan
 `khanza_desktop_bridge_path` ke executable UAT sementara atau ke folder hasil
 build pengembangan.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "emss-farmasi"
-version = "1.0.2"
+version = "1.0.21"
 description = "electronic Medication Alert System pendamping SIMRS Khanza"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -18,6 +18,7 @@ dependencies = [
     "PySide6>=6.11.1,<7",
     "argon2-cffi>=25.1.0,<26",
     "PyMySQL>=1.1,<2",
+    "XlsxWriter>=3.2.9,<3.3",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +46,8 @@ emss = [
     "assets/icons/*.svg",
     "assets/icons/*.md",
     "assets/audio/*.wav",
+    "assets/audio/*.mp3",
+    "assets/audio/*.json",
     "assets/audio/*.md",
     "assets/guides/*.pdf",
 ]

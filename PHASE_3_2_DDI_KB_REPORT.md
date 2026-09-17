@@ -1,0 +1,11 @@
+# PHASE 3.2 — DDI KNOWLEDGE BASE GOVERNANCE & VERSIONING
+
+STATUS: UAT READY
+
+TARGETED TESTS: 33 passed, 0 failed.
+
+CLINICAL CORE MODIFIED: TIDAK.
+
+CHECKLIST: `PHASE_3_2_DDI_KB_UAT_CHECKLIST.md`.
+
+LIMITATION: UAT manual hanya memakai pasangan dan provenance klinis yang telah disetujui.

@@ -28,4 +28,4 @@ shiboken6==6.11.1
 SQLAlchemy==2.0.51
 typing_extensions==4.16.0
 typing-inspection==0.4.2
-
+XlsxWriter==3.2.9
